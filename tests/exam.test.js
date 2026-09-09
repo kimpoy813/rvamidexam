@@ -23,6 +23,7 @@ const serverModule = await import('../server/index.js');
 await new Promise((r) => setTimeout(r, 400));
 
 test.after(async () => {
+  serverModule.httpServer.closeAllConnections?.();
   await new Promise((r) => serverModule.httpServer.close(r));
   rmSync(dir, { recursive: true, force: true });
 });

@@ -233,7 +233,7 @@ function renderSectionIntro(res) {
 
 function renderQuestion(res) {
   const q = res.question;
-  const saved = res.saved;
+  let saved = res.saved;
   $('#qPoints').textContent = `${q.points} point${q.points === 1 ? '' : 's'}`;
 
   const locked = q.locked || state.finished;

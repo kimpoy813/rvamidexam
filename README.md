@@ -5,8 +5,10 @@ Students answer in the browser; every response, score and integrity event is sto
 on the server so the teacher can watch the class live and review everything later —
 the same idea as Google Forms, but built for a supervised exam.
 
-**Zero external dependencies.** Node 22+ only (it uses the SQLite engine that ships
-with Node). No `npm install` step.
+**Zero runtime dependencies.** Node 22+ only — it uses the SQLite engine that ships
+with Node, so `npm start` works on a clean checkout with no `npm install`.
+The test suite is the one exception: it uses `jsdom` (a devDependency) to drive the
+real pages, so run `npm install` before `npm test`.
 
 ---
 
@@ -224,19 +226,31 @@ public/
   index.html  exam.html  teacher.html
   css/        app.css  exam.css  teacher.css
   js/         student-entry.js  exam.js  teacher.js  util.js
-tests/exam.test.js       end-to-end tests against a real server
+tests/
+  exam.test.js           API end-to-end tests against a real server
+  ui.test.js             drives the real pages in jsdom
 ```
 
 ## Tests
 
 ```bash
+npm install     # only needed for jsdom
 npm test
 ```
 
-19 tests boot a real server on a temporary database and exercise the HTTP API:
-the 60-minute clock, access-code rejection, key concealment, per-student shuffling,
-autosave and grading, section locking, violation flagging, teacher grading, results,
-CSV export, the importer, and a full-marks paper built by the real shuffle logic.
+25 tests, all against a real server on a temporary database.
+
+`tests/exam.test.js` exercises the HTTP API: the 60-minute clock, access-code
+rejection, key concealment, per-student shuffling, autosave and grading, section
+locking, violation flagging, teacher grading and time extension, results, CSV
+export, the importer, and a full-marks paper built by the real shuffle logic.
+
+`tests/ui.test.js` loads the actual `exam.html` and runs the actual `exam.js` in
+jsdom, then clicks: booting and rendering a question, an answer reaching the server,
+true/false rendering both options, typing an essay, the progress ring updating, and
+the entry form's validation. This layer exists because a syntax check happily passes
+a page whose click handler assigns to a `const` — that only throws when a student
+actually clicks.
 
 ## Configuration
 
