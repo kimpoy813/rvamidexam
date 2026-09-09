@@ -201,6 +201,23 @@ test('clicking an answer saves it to the server', async (t) => {
   assert.match($(win, '#saveText').textContent, /Saved/, 'the save indicator should confirm');
 });
 
+test('copy, cut, and paste are blocked and logged', async (t) => {
+  const token = await newStudent('UI Bea', 'UI-002B');
+  const page = await openExam(token);
+  t.after(() => page.close());
+  const win = page.win;
+
+  for (const type of ['copy', 'cut', 'paste']) {
+    const ev = new win.Event(type, { bubbles: true, cancelable: true });
+    win.document.dispatchEvent(ev);
+    assert.equal(ev.defaultPrevented, true, `${type} should be blocked`);
+  }
+  await settle(500);
+
+  const paper = await api(`/api/s/${token}/paper`, {});
+  assert.equal(paper.violations, 3, 'clipboard attempts should be logged as integrity events');
+});
+
 test('true/false items render both options and can be answered', async (t) => {
   const token = await newStudent('UI Carla', 'UI-003');
   const paper = await api(`/api/s/${token}/paper`, {});

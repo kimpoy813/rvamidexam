@@ -49,8 +49,9 @@ async function boot() {
   $('#barStudent').textContent = [sessionStorage.getItem('rvm_name'), sessionStorage.getItem('rvm_no')]
     .filter(Boolean).join(' · ') || 'Candidate';
 
-  // Full screen is optional — hide the button unless the teacher opted in.
-  if (!state.info.requireFullscreen) $('#fsBtn').classList.add('hidden');
+  // Browser-side monitoring is now limited to tab changes, so full-screen is
+  // no longer enforced even if an older exam setup still has that flag saved.
+  $('#fsBtn').classList.add('hidden');
 
   $('#totalCount').textContent = state.paper.total;
   renderSidebar();
@@ -547,131 +548,101 @@ async function renderResult() {
 
 let heartbeatTimer = null;
 let guardInstalled = false;
+let visibilityHandler = null;
+let keydownHandler = null;
+let beforeUnloadHandler = null;
+let clipboardHandlers = [];
+let tabChannel = null;
+let tabPingTimer = null;
 
 function installGuards() {
   if (guardInstalled) return;
   guardInstalled = true;
 
-  // --- full screen
-  if (state.info.requireFullscreen) {
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
-    setTimeout(() => { if (!document.fullscreenElement) requestFullscreen(); }, 400);
-  }
-
-  $('#fsBtn').addEventListener('click', requestFullscreen);
-
-  // --- tab / window focus
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
+  // Browser-side monitoring is intentionally lighter: tab changes, second-tab
+  // opens, and clipboard actions are treated as integrity events.
+  visibilityHandler = () => {
+    if (!state.finished && document.hidden) {
       flag('tab_hidden');
       showVeil('tab');
     }
-  });
-  window.addEventListener('blur', () => {
-    if (!document.hidden) flag('window_blur');
-  });
+  };
+  document.addEventListener('visibilitychange', visibilityHandler);
 
-  // --- clipboard + menus + shortcuts
-  ['copy', 'cut', 'paste'].forEach((evt) => {
-    document.addEventListener(evt, (e) => {
-      e.preventDefault();
-      flag(evt === 'paste' ? 'paste' : evt === 'cut' ? 'cut' : 'copy');
-      toast(`${evt === 'paste' ? 'Pasting' : 'Copying'} is not allowed during the exam.`, 'warn');
-    });
-  });
-
-  document.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    flag('contextmenu');
-  });
-
-  document.addEventListener('selectstart', (e) => {
-    const tag = e.target?.tagName;
-    if (tag !== 'INPUT' && tag !== 'TEXTAREA') e.preventDefault();
-  });
-
-  document.addEventListener('keydown', (e) => {
+  keydownHandler = (e) => {
     const k = e.key.toLowerCase();
-    const combo =
-      (e.ctrlKey || e.metaKey) && ['c', 'v', 'x', 'u', 'p', 's', 'a'].includes(k) ||
-      (e.ctrlKey || e.metaKey) && e.shiftKey && ['i', 'j', 'c', 'k'].includes(k) ||
-      k === 'f12' || k === 'printscreen';
 
-    if (combo && document.activeElement?.tagName !== 'TEXTAREA') {
-      e.preventDefault();
-      flag('devtools_key');
-      toast('That shortcut is disabled during the exam.', 'warn');
-    }
-
-    // Number keys answer multiple-choice questions
+    // Number keys answer multiple-choice questions.
     if (!e.ctrlKey && !e.metaKey && !e.altKey && /^[1-9]$/.test(k)) {
       const target = document.activeElement?.tagName;
       if (target === 'INPUT' || target === 'TEXTAREA') return;
       const btn = document.querySelectorAll('.choice')[Number(k) - 1];
       if (btn && !btn.disabled) btn.click();
     }
+
     if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
       if (e.key === 'ArrowRight' && !$('#nextBtn').disabled) $('#nextBtn').click();
       if (e.key === 'ArrowLeft' && !$('#prevBtn').disabled) $('#prevBtn').click();
     }
+  };
+  document.addEventListener('keydown', keydownHandler);
+
+  // Clipboard actions stay blocked and logged.
+  clipboardHandlers = ['copy', 'cut', 'paste'].map((evt) => {
+    const handler = (e) => {
+      e.preventDefault();
+      flag(evt === 'paste' ? 'paste' : evt === 'cut' ? 'cut' : 'copy');
+      toast(`${evt === 'paste' ? 'Pasting' : evt === 'cut' ? 'Cutting' : 'Copying'} is not allowed during the exam.`, 'warn');
+    };
+    document.addEventListener(evt, handler);
+    return { evt, handler };
   });
 
-  window.addEventListener('beforeprint', () => flag('print'));
-
-  // Warn before navigating away
-  window.addEventListener('beforeunload', (e) => {
+  // Keep the accidental-leave warning even though it is no longer counted as a
+  // violation. It protects unsent typing and the running timer.
+  beforeUnloadHandler = (e) => {
     if (state.finished) return;
     e.preventDefault();
     e.returnValue = '';
-  });
+  };
+  window.addEventListener('beforeunload', beforeUnloadHandler);
 
-  // Detect a second tab of the same exam
-  const bc = 'BroadcastChannel' in window ? new BroadcastChannel(`rvm-${token}`) : null;
-  if (bc) {
-    bc.postMessage({ hello: token });
-    bc.onmessage = (ev) => {
+  // Detect a second tab of the same exam.
+  if ('BroadcastChannel' in window) {
+    tabChannel = new BroadcastChannel(`rvm-${token}`);
+    tabChannel.postMessage({ hello: token });
+    tabChannel.onmessage = (ev) => {
+      if (state.finished) return;
       if (ev.data?.hello === token) {
         flag('second_tab');
         showVeil('second');
       }
-      if (ev.data?.ping === token) bc.postMessage({ hello: token });
+      if (ev.data?.ping === token) tabChannel.postMessage({ hello: token });
     };
-    setInterval(() => bc.postMessage({ ping: token }), 4000);
-  }
-
-  // Reload counter
-  const reloads = Number(sessionStorage.getItem('rvm_reloads') || 0) + 1;
-  sessionStorage.setItem('rvm_reloads', String(reloads));
-  if (reloads > 1) {
-    api(`/api/s/${token}/flag`, { method: 'POST', body: { type: 'reload', detail: `reload #${reloads}` } })
-      .catch(() => {});
+    tabPingTimer = setInterval(() => tabChannel.postMessage({ ping: token }), 4000);
   }
 }
 
 function removeGuards() {
-  window.onbeforeunload = null;
-  window.removeEventListener('beforeunload', () => {});
-  document.removeEventListener('fullscreenchange', onFullscreenChange);
+  if (!guardInstalled) return;
+  guardInstalled = false;
+
+  if (visibilityHandler) document.removeEventListener('visibilitychange', visibilityHandler);
+  if (keydownHandler) document.removeEventListener('keydown', keydownHandler);
+  if (beforeUnloadHandler) window.removeEventListener('beforeunload', beforeUnloadHandler);
+  clipboardHandlers.forEach(({ evt, handler }) => document.removeEventListener(evt, handler));
+
+  visibilityHandler = null;
+  keydownHandler = null;
+  beforeUnloadHandler = null;
+  clipboardHandlers = [];
+
+  if (tabPingTimer) clearInterval(tabPingTimer);
+  tabPingTimer = null;
+  if (tabChannel) tabChannel.close?.();
+  tabChannel = null;
+
   $('#fsBtn')?.classList.add('hidden');
-  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
-}
-
-function onFullscreenChange() {
-  if (!document.fullscreenElement && !state.finished) {
-    flag('fullscreen_exit');
-    showVeil('fullscreen');
-  } else {
-    hideVeil();
-  }
-}
-
-async function requestFullscreen() {
-  try {
-    await document.documentElement.requestFullscreen();
-  } catch {
-    toast('Please press F11 (or use your browser menu) to enter full screen.', 'warn', 5000);
-  }
 }
 
 async function flag(type, detail = '') {
@@ -692,11 +663,6 @@ const VEILS = {
     title: 'You left the exam tab',
     body: 'Switching away from the exam is recorded and reported to your teacher. Return now to continue.',
     icon: ICON.alert
-  },
-  fullscreen: {
-    title: 'Full screen is required',
-    body: 'The exam must stay in full screen. Click the button below to continue — this event has been logged.',
-    icon: ICON.expand
   },
   second: {
     title: 'Exam already open elsewhere',
@@ -727,8 +693,7 @@ function hideVeil() {
   $('#veil').classList.add('hidden');
 }
 
-$('#veilBtn').addEventListener('click', async () => {
-  if (state.info?.requireFullscreen && !document.fullscreenElement) await requestFullscreen();
+$('#veilBtn').addEventListener('click', () => {
   hideVeil();
   window.focus();
 });
@@ -742,9 +707,7 @@ function startHeartbeat() {
       const res = await api(`/api/s/${token}/heartbeat`, {
         method: 'POST',
         body: {
-          visible: !document.hidden,
-          fullscreen: !state.info.requireFullscreen || !!document.fullscreenElement,
-          focus: document.hasFocus()
+          visible: !document.hidden
         }
       });
       state.secondsLeft = Math.min(state.secondsLeft, res.secondsLeft);

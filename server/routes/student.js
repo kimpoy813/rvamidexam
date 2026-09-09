@@ -385,8 +385,8 @@ export function registerStudentRoutes(router) {
   });
 
   /**
-   * Presence ping. Also detects state transitions the browser cannot hide:
-   * a tab that was visible becoming hidden, or full-screen being dropped.
+   * Presence ping. Browser-side monitoring is intentionally limited to tab
+   * visibility, so the server only detects a visible tab becoming hidden.
    */
   router.post('/api/s/:token/heartbeat', async (req, res) => {
     let session = load(req.params.token);
@@ -395,20 +395,15 @@ export function registerStudentRoutes(router) {
     const prev = heartbeatState.get(session.token) || {};
 
     const next = {
-      visible: body.visible !== false,
-      fullscreen: body.fullscreen !== false,
-      focus: body.focus !== false
+      visible: body.visible !== false
     };
 
     if (prev.visible && !next.visible) registerViolation(session.token, 'tab_hidden');
-    if (s.require_fullscreen === '1' && prev.fullscreen && !next.fullscreen) {
-      registerViolation(session.token, 'fullscreen_exit');
-    }
 
     heartbeatState.set(session.token, next);
     updateSession(session.token, { last_seen: now() });
 
-    session = fresh(session);
+    session = fresh(getSession(session.token));
     broadcastRoster();
 
     sendJson(res, 200, {

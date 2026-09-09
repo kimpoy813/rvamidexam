@@ -81,8 +81,9 @@ The live monitor then shows everyone who has joined, updating in real time.
 
 ## Anti-cheating
 
-Everything below is recorded against the session and appears in the teacher's live
-feed and in each student's timeline.
+Browser-side monitoring is intentionally lighter. The platform records tab changes,
+second-tab opens, and clipboard attempts; the rest of the safeguards stay
+server-side.
 
 | Control | How it works |
 | --- | --- |
@@ -90,15 +91,12 @@ feed and in each student's timeline.
 | Answer key never leaves the server | The student API sends `hasAnswer: true`, never the key. Grading resolves the key from the database. |
 | One question at a time | `/item?i=N` returns a single question, so the whole paper cannot be pulled in one request. |
 | Per-student shuffling | Seeded per session, so screen-sharing and looking sideways do not transfer. |
-| Full-screen *(optional, off by default)* | When the teacher enables it, leaving full screen is logged. It is never forced otherwise. |
-| Tab / window detection | `visibilitychange` and `blur` are logged; the heartbeat also detects the transition server-side. |
-| Clipboard & menu blocking | Copy, cut, paste, right-click, text selection and print are blocked and logged. |
-| Shortcut blocking | F12, Ctrl+C/V/X/U/P/S, Ctrl+Shift+I/J/C/K are intercepted. |
+| Tab detection | `visibilitychange` plus the heartbeat record when an exam tab that was visible becomes hidden. |
+| Clipboard blocking | Copy, cut, and paste are blocked in the browser and logged. |
 | Second-tab detection | A `BroadcastChannel` handshake spots the exam opened twice. |
-| Reload counter | Reloads are counted and reported. |
 | Single live attempt | Joining again with the same student number while another device is active is refused. |
 | Section locking *(off by default)* | When enabled, moving past a part locks it and the server refuses edits and navigation back into it. |
-| Violation threshold | After N events the student is flagged (and can be auto-submitted). |
+| Violation threshold | After N tab or clipboard-related events the student is flagged (and can be auto-submitted). |
 | Identity capture | Name, student number, class, IP and user agent are stored. |
 
 These are deterrents plus an audit trail — a determined student on their own machine
@@ -335,17 +333,18 @@ npm install     # only needed for jsdom
 npm test
 ```
 
-30 tests, all against a real server on a temporary database (~26s).
+67 tests, all against a real server on a temporary database (~45s).
 
 `tests/exam.test.js` exercises the HTTP API: the 60-minute clock, access-code
 rejection, key concealment, per-student shuffling, autosave and grading, section
-locking, violation flagging, teacher grading and time extension, results, CSV
-export, the importer, and a full-marks paper built by the real shuffle logic.
+locking, tab-visibility violation flagging, teacher grading and time extension,
+results, CSV export, the importer, and a full-marks paper built by the real shuffle
+logic.
 
 `tests/ui.test.js` loads the actual `exam.html` and runs the actual `exam.js` in
 jsdom, then clicks: booting and rendering a question, an answer reaching the server,
-true/false rendering both options, typing an essay, the progress ring updating, and
-the entry form validating.
+clipboard blocking/logging, true/false rendering both options, typing an essay, the
+progress ring updating, and the entry form validating.
 
 `tests/teacher-ui.test.js` does the same for the dashboard: a live class rendering,
 a flagged student called out, the detail drawer with inline grading, the scoreboard
