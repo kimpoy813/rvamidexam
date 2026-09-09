@@ -141,11 +141,13 @@ const DEFAULT_SETTINGS = {
   access_code: '',
   shuffle_questions: '1',
   shuffle_choices: '1',
-  lock_sections: '1',
+  // Sections do not lock: students may revisit an earlier part within the hour.
+  lock_sections: '0',
   require_fullscreen: '1',
   max_violations: '8',
   auto_submit_on_violations: '0',
-  show_result_to_student: '1',
+  // Scores stay with the teacher; students see only a confirmation.
+  show_result_to_student: '0',
   allow_resume: '1',
   exam_open: '1',
   proctor_notes: ''

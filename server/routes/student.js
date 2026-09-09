@@ -36,6 +36,7 @@ export function registerStudentRoutes(router) {
       examOpen: s.exam_open === '1',
       requireFullscreen: s.require_fullscreen === '1',
       lockSections: s.lock_sections === '1',
+      showResult: s.show_result_to_student === '1',
       maxViolations: Number(s.max_violations) || 0,
       totalQuestions: paper.reduce((n, sec) => n + sec.questions.length, 0),
       totalPoints: paper.reduce(

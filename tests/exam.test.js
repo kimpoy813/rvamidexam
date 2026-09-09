@@ -28,7 +28,7 @@ test.after(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const { getSettings } = await import('../server/lib/db.js');
+const { getSettings, setSettings } = await import('../server/lib/db.js');
 const accessCode = getSettings().access_code;
 
 async function call(method, url, body, token) {
@@ -154,35 +154,68 @@ test('answers are saved and graded on submit', async () => {
 
   const submit = await call('POST', `/api/s/${token}/submit`, { confirm: true });
   assert.equal(submit.data.submitted, true);
-  assert.ok(submit.data.grade.max > 0);
+
+  // Scores are withheld by default: the student sees a confirmation only.
+  assert.equal(submit.data.showResult, false, 'results should be hidden from the student');
+  assert.equal(submit.data.grade, null, 'no grade should be returned to the student');
+
+  // The teacher still sees the mark.
+  const detail = (await call('GET', `/api/teacher/session/${token}`, undefined, teacher)).data;
+  assert.ok(detail.grade.max > 0, 'the teacher should still see a graded paper');
+  assert.equal(Object.keys(detail.grade.items).length, 21);
 
   // A submitted paper can no longer be changed.
   const late = await call('POST', `/api/s/${token}/answer`, { questionId: 'x', value: 1 });
   assert.equal(late.status, 409);
 });
 
-test('locked sections cannot be revisited once passed', async () => {
+test('students can revisit an earlier part when section locking is off', async () => {
+  assert.equal(getSettings().lock_sections, '0', 'locking is off by default');
+
   const j = await call('POST', '/api/sessions', {
-    access_code: accessCode, student_name: 'Felipe Lim', student_no: 'S-004', class_section: '10-StMary'
+    access_code: accessCode, student_name: 'Nora Vil', student_no: 'S-007', class_section: '10-StMary'
   });
   const token = j.data.token;
   await call('POST', `/api/s/${token}/start`, {});
   const paper = (await call('GET', `/api/s/${token}/paper`)).data;
-  const secondStart = paper.sections[1].start;
 
-  // Move into section 2, which locks section 1 behind us.
-  const moved = await call('POST', `/api/s/${token}/goto`, { index: secondStart });
+  const moved = await call('POST', `/api/s/${token}/goto`, { index: paper.sections[1].start });
   assert.equal(moved.status, 200);
-  assert.equal(moved.data.maxSection, 1);
-
   const back = await call('POST', `/api/s/${token}/goto`, { index: 0 });
-  assert.equal(back.status, 403);
-  assert.match(back.data.error, /locked/i);
+  assert.equal(back.status, 200, 'going back should be allowed');
 
-  // Editing an item in the locked section is refused too.
   const firstQ = paper.sections[0].questions[0].id;
-  const edit = await call('POST', `/api/s/${token}/answer`, { questionId: firstQ, value: 0 });
-  assert.equal(edit.status, 403);
+  const edit = await call('POST', `/api/s/${token}/answer`, { questionId: firstQ, value: 1 });
+  assert.equal(edit.status, 200, 'an earlier answer should still be editable');
+});
+
+test('locked sections cannot be revisited once locking is enabled', async () => {
+  setSettings({ lock_sections: '1' });
+  try {
+    const j = await call('POST', '/api/sessions', {
+      access_code: accessCode, student_name: 'Felipe Lim', student_no: 'S-004', class_section: '10-StMary'
+    });
+    const token = j.data.token;
+    await call('POST', `/api/s/${token}/start`, {});
+    const paper = (await call('GET', `/api/s/${token}/paper`)).data;
+    const secondStart = paper.sections[1].start;
+
+    // Move into section 2, which locks section 1 behind us.
+    const moved = await call('POST', `/api/s/${token}/goto`, { index: secondStart });
+    assert.equal(moved.status, 200);
+    assert.equal(moved.data.maxSection, 1);
+
+    const back = await call('POST', `/api/s/${token}/goto`, { index: 0 });
+    assert.equal(back.status, 403);
+    assert.match(back.data.error, /locked/i);
+
+    // Editing an item in the locked section is refused too.
+    const firstQ = paper.sections[0].questions[0].id;
+    const edit = await call('POST', `/api/s/${token}/answer`, { questionId: firstQ, value: 0 });
+    assert.equal(edit.status, 403);
+  } finally {
+    setSettings({ lock_sections: '0' });
+  }
 });
 
 test('integrity events are counted and flag the student at the limit', async () => {
@@ -241,10 +274,10 @@ test('essay answers stay pending until the teacher grades them', async () => {
   await call('POST', `/api/s/${token}/goto`, { index: essay.index });
   await call('POST', `/api/s/${token}/answer`, { questionId: essay.id, value: 'A thoughtful essay.' });
   const sub = await call('POST', `/api/s/${token}/submit`, { confirm: true });
-  assert.equal(sub.data.grade.pending, 15, 'the 15-point essay should be pending');
+  assert.equal(sub.data.showResult, false, 'the student should not see the pending mark');
 
   const detail = (await call('GET', `/api/teacher/session/${token}`, undefined, teacher)).data;
-  assert.equal(detail.grade.pending, 15);
+  assert.equal(detail.grade.pending, 15, 'the 15-point essay should be pending for the teacher');
 
   await call('POST', `/api/teacher/session/${token}/grade`,
     { questionId: essay.id, points: 12, note: 'Well argued.' }, teacher);

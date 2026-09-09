@@ -37,10 +37,15 @@ async function loadInfo() {
   if (!info.requireFullscreen) {
     $('#rulesList').children[1]?.remove();
   }
-  if (!info.lockSections) {
-    [...$('#rulesList').children].forEach((li) => {
-      if (/Sections lock/.test(li.textContent)) li.remove();
-    });
+
+  // These two rules depend on how the teacher has configured the exam.
+  if (info.lockSections) {
+    $('#ruleNavigate').innerHTML =
+      '<b>Sections lock.</b> Once you move past a section you cannot return to it.';
+  }
+  if (info.showResult) {
+    $('#ruleScores').innerHTML =
+      '<b>Your score is shown when you submit.</b> You can review each item afterwards.';
   }
 
   if (!info.examOpen) {

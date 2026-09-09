@@ -66,7 +66,11 @@ The live monitor then shows everyone who has joined, updating in real time.
   from a seed stored with their session, so it is stable across reloads but different
   from their neighbour's.
 - Keyboard shortcuts: `1`–`9` to pick an option, `←`/`→` to move between items.
-- An item review screen after submitting (can be turned off).
+- **Free navigation** — students can move between parts and change an answer any
+  time before submitting. (Section locking is available as a toggle, off by default.)
+- **No score on screen.** Submitting shows a confirmation only; results stay with the
+  teacher. (Also a toggle — turn on *Show results to students* to release an item
+  review immediately.)
 
 ---
 
@@ -88,7 +92,7 @@ feed and in each student's timeline.
 | Second-tab detection | A `BroadcastChannel` handshake spots the exam opened twice. |
 | Reload counter | Reloads are counted and reported. |
 | Single live attempt | Joining again with the same student number while another device is active is refused. |
-| Section locking | Moving past a part locks it; the server refuses edits and navigation back into it. |
+| Section locking *(off by default)* | When enabled, moving past a part locks it and the server refuses edits and navigation back into it. |
 | Violation threshold | After N events the student is flagged (and can be auto-submitted). |
 | Identity capture | Name, student number, class, IP and user agent are stored. |
 
