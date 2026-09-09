@@ -1,0 +1,23 @@
+# Render Blueprint for the RVM Midterm Exam app.
+#
+# IMPORTANT: this project is a Node.js application (server/index.js).
+# It must be deployed with the Node runtime — NOT Go. Deploying it as a
+# Go service fails immediately with "go.mod file not found".
+#
+# If you created this service by hand in the Render dashboard instead of
+# from this blueprint, change the existing service (Dashboard -> your
+# service -> Settings -> Environment) from "Go" to "Node", set Build
+# Command to `npm install`, and Start Command to `npm start`.
+
+services:
+  - type: web
+    name: rvam-exam
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
