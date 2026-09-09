@@ -35,8 +35,95 @@ const ANSWER_LINE = /^\s*(?:ans|answer|key)\s*:?\s*(.+)$/i;
 const POINTS_TAG = /\[\s*(\d+(?:\.\d+)?)\s*\]/;
 const POINTS_WORDS = /\(\s*(\d+(?:\.\d+)?)\s*(?:pts?|points?)\s*\)/i;
 
+// A trailing answer key. Real exam papers keep the answers on a separate page
+// rather than marking them inline, so a teacher pastes the paper and the key
+// together and expects both to be understood.
+const KEY_HEADING = /^\s*(answer\s*key|answer\s*sheet|key\s*to\b|answers?)\s*[:\-]?\s*$/i;
+const KEY_ENTRY = /(\d{1,3})\s*[.):\-]\s*/g;
+const KEY_RANGE = /^\s*(\d{1,3})\s*[-–—]\s*(\d{1,3})\s*[.):\-]\s*(.*)$/;
+const TRUE_FALSE_KEY = /^(true|false|t|f|yes|no|tama|mali)$/i;
+
+/**
+ * Peel a trailing answer key off the paper.
+ * Returns the body lines plus a map of item number -> key value.
+ */
+function splitKeyBlock(lines) {
+  const start = lines.findIndex((l) => KEY_HEADING.test(l));
+  if (start === -1) return { body: lines, key: new Map() };
+
+  const key = new Map();
+  for (const rawLine of lines.slice(start + 1)) {
+    const line = rawLine.trim();
+    if (!line || /^#{1,3}\s+/.test(line)) continue;
+
+    // "1-5. B A C D A" — spread the listed values across the range.
+    const range = line.match(KEY_RANGE);
+    if (range) {
+      const lo = parseInt(range[1], 10);
+      const hi = parseInt(range[2], 10);
+      const values = range[3].trim().split(/[\s,;]+/).filter(Boolean);
+      if (values.length && hi >= lo) {
+        values.forEach((value, offset) => {
+          if (lo + offset <= hi) key.set(lo + offset, value.replace(/^[ .,;]+|[ .,;]+$/g, ''));
+        });
+        continue;
+      }
+    }
+
+    // Several entries may share a line: "1. B   2. A   3. C".
+    const entries = [...line.matchAll(KEY_ENTRY)];
+    entries.forEach((m, i) => {
+      const end = i + 1 < entries.length ? entries[i + 1].index : line.length;
+      const value = line.slice(m.index + m[0].length, end).trim().replace(/^[,;]+|[,;]+$/g, '');
+      if (value) key.set(parseInt(m[1], 10), value);
+    });
+  }
+
+  // Require a couple of entries before believing this was really a key, so a
+  // stray "Answer" heading in the middle of a paper cannot swallow it.
+  if (key.size < 2) return { body: lines, key: new Map() };
+  return { body: lines.slice(0, start), key };
+}
+
+/**
+ * Attach a key value to an item. Mirrors tools/doc2exam.py so the dashboard
+ * paste path and the document converter agree on how a key is read.
+ */
+function applyKey(item, value) {
+  const v = String(value).trim();
+  if (!v) return false;
+
+  if (item.choices.length) {
+    if (/^[A-J]$/i.test(v)) {
+      if (item.starred.length) return false; // an inline "*" already marked it
+      const idx = v.toUpperCase().charCodeAt(0) - 65;
+      if (idx < item.choices.length) {
+        item.starred = [idx];
+        return true;
+      }
+      return false;
+    }
+    // A key written out in full rather than as a letter.
+    const found = item.choices.findIndex((c) => c.trim().toLowerCase() === v.toLowerCase());
+    if (found !== -1) {
+      item.starred = [found];
+      return true;
+    }
+    return false;
+  }
+
+  if (TRUE_FALSE_KEY.test(v)) {
+    item.answerLine = /^(true|t|yes|tama)$/i.test(v) ? 'TRUE' : 'FALSE';
+    return true;
+  }
+
+  item.answerLine = v;
+  return true;
+}
+
 export function parseExamText(text, fallbackTitle = 'Imported Exam') {
-  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  const allLines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  const { body: lines, key } = splitKeyBlock(allLines);
   const warnings = [];
   const sections = [];
   let section = null;
@@ -151,6 +238,18 @@ export function parseExamText(text, fallbackTitle = 'Imported Exam') {
     }
   }
 
+  // ---- apply a trailing answer sheet, numbered by position across the paper
+  let globalNumber = 0;
+  const keyApplied = [];
+  for (const sec of sections) {
+    for (const q of sec.questions) {
+      globalNumber += 1;
+      if (key.has(globalNumber) && applyKey(q, key.get(globalNumber))) {
+        keyApplied.push(globalNumber);
+      }
+    }
+  }
+
   // ---- resolve kinds and answers
   const resolved = sections
     .map((sec) => ({
@@ -164,7 +263,7 @@ export function parseExamText(text, fallbackTitle = 'Imported Exam') {
     warnings.push('No questions were found. Check that each item starts with a number like "1."');
   }
 
-  return { title, sections: resolved, warnings };
+  return { title, sections: resolved, warnings, keyApplied };
 }
 
 function resolveQuestion(q, sec, index, warnings) {

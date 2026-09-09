@@ -486,6 +486,140 @@ B. CO2 *
   assert.equal(third.prompt, 'Explain photosynthesis.');
 });
 
+test('a trailing answer key is applied back to the paper', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  const parsed = parseExamText(`# Part I. Multiple Choice
+Directions: Choose the letter of the correct answer.
+
+1. Which of the following is a chemical change?
+A. Melting of ice
+B. Rusting of iron
+C. Dissolving sugar
+
+2. What is the smallest unit of an element?
+A. Molecule
+B. Atom
+C. Compound
+
+# Part II. True or False
+
+3. Sound travels faster in water than in air.
+4. The mitochondria is the powerhouse of the cell.
+
+# Part III. Identification
+
+5. The process by which plants make their own food.
+
+ANSWER KEY
+1. B    2. B
+3. TRUE    4. FALSE
+5. Photosynthesis
+`);
+  // Regression: the key block used to be parsed as paper content, which
+  // invented a bogus item and left every real answer null.
+  const [mcq, tf, ident] = parsed.sections;
+
+  assert.deepEqual(parsed.keyApplied, [1, 2, 3, 4, 5]);
+  assert.equal(parsed.warnings.length, 0, parsed.warnings.join('; '));
+
+  assert.equal(mcq.questions.length, 2, 'the key must not create extra items');
+  assert.equal(mcq.questions[0].answer, 'Rusting of iron');
+  assert.equal(mcq.questions[1].answer, 'Atom');
+
+  assert.equal(tf.questions[0].kind, 'truefalse');
+  assert.equal(tf.questions[0].answer, 'True');
+  assert.equal(tf.questions[1].answer, 'False');
+
+  assert.equal(ident.questions[0].kind, 'short');
+  assert.equal(ident.questions[0].answer, 'Photosynthesis');
+});
+
+test('an answer key may use ranges and one entry per line', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  const parsed = parseExamText(`# Part I. Multiple Choice
+1. One?
+A. a
+B. b
+C. c
+
+2. Two?
+A. a
+B. b
+C. c
+
+3. Three?
+A. a
+B. b
+C. c
+
+4. Four?
+A. a
+B. b
+C. c
+
+5. Five?
+A. a
+B. b
+C. c
+
+ANSWER KEY
+1-3. B A C
+4. A
+5. C
+`);
+  const qs = parsed.sections[0].questions;
+
+  assert.deepEqual(parsed.keyApplied, [1, 2, 3, 4, 5]);
+  assert.deepEqual(
+    qs.map((q) => q.answer),
+    ['b', 'a', 'c', 'a', 'c']
+  );
+});
+
+test('an inline star still wins over a contradicting key sheet', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  const parsed = parseExamText(`# Part I. Multiple Choice
+1. Which is marked inline?
+A. inline *
+B. other
+C. third
+
+2. Which is not marked?
+A. a
+B. b
+C. c
+
+ANSWER KEY
+1. C
+2. B
+`);
+  const [first, second] = parsed.sections[0].questions;
+
+  assert.equal(first.answer, 'inline', 'the inline marker should beat the key sheet');
+  assert.equal(second.answer, 'b', 'the key should fill in the unmarked item');
+  assert.deepEqual(parsed.keyApplied, [2], 'item 1 was already marked inline');
+});
+
+test('a stray "Answer" heading does not swallow the paper', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  const parsed = parseExamText(`# Part I. Multiple Choice
+1. Which is prime?
+A. 4
+B. 7 *
+
+Answer the following questions carefully.
+
+2. Which is even?
+A. 3
+B. 8 *
+`);
+  // Only one key-like entry follows the stray heading, which is not enough to
+  // treat it as an answer sheet, so both items must survive untouched.
+  assert.equal(parsed.sections[0].questions.length, 2);
+  assert.equal(parsed.sections[0].questions[0].answer, '7');
+  assert.equal(parsed.sections[0].questions[1].answer, '8');
+});
+
 test('the teacher API refuses anonymous callers', async () => {
   const { status } = await call('GET', '/api/teacher/roster');
   assert.equal(status, 401);

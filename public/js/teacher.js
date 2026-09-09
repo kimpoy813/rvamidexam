@@ -811,7 +811,7 @@ $('#previewBank').addEventListener('click', async () => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Could not read that text.');
-    paintPreview(data.sections, data.warnings || []);
+    paintPreview(data.sections, data.warnings || [], data.keyApplied);
     toast(`Read ${data.counts.questions} items in ${data.counts.sections} parts (${data.counts.points} pts).`, 'ok');
   } catch (err) {
     toast(err.message, 'bad');
@@ -832,7 +832,7 @@ $('#importBank').addEventListener('click', async () => {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Import failed.');
     toast(`Imported ${data.counts.questions} items.`, 'ok');
-    paintPreview((await api('/api/teacher/exam')).blueprint, data.warnings || []);
+    paintPreview((await api('/api/teacher/exam')).blueprint, data.warnings || [], data.keyApplied);
     loadExam();
     refreshResults();
   } catch (err) {
@@ -840,11 +840,17 @@ $('#importBank').addEventListener('click', async () => {
   }
 });
 
-function paintPreview(sections, warnings) {
-  $('#bankWarnings').innerHTML = warnings?.length
-    ? `<div class="warn-box"><b>${warnings.length} thing(s) to check</b><ul>
-        ${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul></div>`
+function paintPreview(sections, warnings, keyApplied) {
+  const keyNote = keyApplied?.length
+    ? `<div class="warn-box" style="border-color:var(--good,#2e7d32)"><b>Answer key read</b>
+        &nbsp;applied to ${keyApplied.length} item(s): ${escapeHtml(keyApplied.join(', '))}</div>`
     : '';
+
+  $('#bankWarnings').innerHTML =
+    (warnings?.length
+      ? `<div class="warn-box"><b>${warnings.length} thing(s) to check</b><ul>
+        ${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul></div>`
+      : '') + keyNote;
 
   $('#bankPreview').innerHTML = sections.length ? sections.map((sec) => `
     <div class="bp-sec">

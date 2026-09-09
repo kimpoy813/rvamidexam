@@ -210,6 +210,37 @@ Ans: Au | gold
 An item with no key is kept and graded manually rather than discarded. **Preview**
 lists anything it could not read.
 
+### An answer key on a separate page
+
+Exam papers usually keep their answers at the end rather than marking them inline,
+often on a different page or in a different file. Paste the paper and the key
+together and both are read — the key is peeled off first, so it is never mistaken
+for exam content:
+
+```
+# Part I. Multiple Choice
+
+1. Which of the following is a chemical change?
+A. Melting of ice
+B. Rusting of iron
+C. Dissolving sugar
+
+2. Sound travels faster in water than in air.
+
+ANSWER KEY
+1. B
+2. TRUE
+```
+
+The heading may be `ANSWER KEY`, `ANSWER SHEET`, `KEY` or `ANSWERS`. Entries can be
+one per line, several per line (`1. B   2. A   3. C`), or a range with the values
+listed after it (`1-5. B A C D A`). Items are matched by their position across the
+whole paper.
+
+A key value is read as a choice letter, a true/false, or free text, whichever fits
+the item. An inline `*` always wins over a contradicting key sheet, and **Preview**
+reports which items the key was applied to.
+
 ### JSON
 
 ```json

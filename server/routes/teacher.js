@@ -393,7 +393,12 @@ export function registerTeacherRoutes(router, { requireAuth }) {
     if (!parsed.sections.length) throw new HttpError(400, 'No questions could be read from that text.');
     const blueprint = replaceExam(parsed);
     broadcastRoster(true);
-    sendJson(res, 200, { ok: true, warnings: parsed.warnings, counts: countBlueprint(blueprint) });
+    sendJson(res, 200, {
+      ok: true,
+      warnings: parsed.warnings,
+      keyApplied: parsed.keyApplied,
+      counts: countBlueprint(blueprint)
+    });
   });
 
   router.post('/api/teacher/reset-attempts', async (req, res) => {
