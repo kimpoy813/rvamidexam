@@ -4,16 +4,28 @@
 # It must be deployed with the Node runtime — NOT Go. Deploying it as a
 # Go service fails immediately with "go.mod file not found".
 #
-# If you created this service by hand in the Render dashboard instead of
-# from this blueprint, change the existing service (Dashboard -> your
-# service -> Settings -> Environment) from "Go" to "Node", set Build
-# Command to `npm install`, and Start Command to `npm start`.
+# DATA PERSISTENCE: the exams, question banks, student attempts and the
+# teacher password all live in the SQLite file under EXAM_DATA_DIR.
+# Render's default filesystem is EPHEMERAL — anything written to it (including
+# a changed teacher password) is lost on every deploy or restart. A persistent
+# disk keeps that data. Persistent disks require a PAID plan, so this blueprint
+# uses `plan: starter` and mounts a disk at the data directory.
+#
+#   • To stay on the free plan instead: remove the `disk:` block, the
+#     EXAM_DATA_DIR env var, and set `plan: free`. Your data will reset on
+#     every deploy/restart.
+#   • If you created this service by hand in the Render dashboard instead of
+#     from this blueprint, change the existing service (Dashboard → your
+#     service → Settings → Environment) from "Go" to "Node", set Build Command
+#     to `npm install`, Start Command to `npm start`, then add a persistent
+#     disk on the service's Disks page mounted at /opt/render/project/src/data
+#     and set the EXAM_DATA_DIR environment variable to the same path.
 
 services:
   - type: web
     name: rvam-exam
     runtime: node
-    plan: free
+    plan: starter
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /
@@ -21,3 +33,9 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: EXAM_DATA_DIR
+        value: /opt/render/project/src/data
+    disk:
+      name: exam-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1

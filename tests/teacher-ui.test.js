@@ -240,7 +240,7 @@ test('the exam setup tab loads the current settings and question bank', async ()
   assert.equal($(win, '#sTitle').value, 'Midterm Examination (SAMPLE)');
   assert.equal($(win, '#sDuration').value, '60', 'the one-hour limit should be configured');
   assert.equal($(win, '#sShuffleQ').checked, true, 'question shuffling should be on');
-  assert.equal($(win, '#sFs').checked, true, 'full screen should be required');
+  assert.equal($(win, '#sFs').checked, false, 'full screen should not be required by default');
   assert.equal($(win, '#sOpen').checked, true, 'the exam should be open');
 
   assert.match($(win, '#bankCount').textContent, /4 parts · 21 items · 50 pts/);

@@ -4,15 +4,16 @@
  */
 import crypto from 'node:crypto';
 import {
-  getSettings, setSettings, verifyTeacher, issueTeacherToken, teacherFromToken,
-  revokeTeacherToken, getSession, listSessions, updateSession, logEvent, now,
-  eventsFor, getExamBlueprint, replaceExam, deleteSessionsExceptKeep, getQuestions,
-  getSections, ensureTeacher
+  getSettings, setSettings, getExamSettings, getCurrentExamId, setCurrentExamId,
+  verifyTeacher, issueTeacherToken, teacherFromToken, revokeTeacherToken, getSession,
+  listSessions, updateSession, logEvent, now, eventsFor, getExamBlueprint, replaceExam,
+  deleteSessionsExceptKeep, getQuestions, getSections, ensureTeacher,
+  listExams, createExam, deleteExam, duplicateExam, findExamByCode, getExam
 } from '../lib/db.js';
 import { buildPaper, gradePaper, itemAnalysis, toCsv, normalizeAnswer } from '../lib/exam.js';
 import { HttpError, sendJson, sendText, readJsonBody, readTextBody } from '../lib/http.js';
-import { hub, rosterSnapshot, broadcastRoster, finishSession, enforceDeadlines, secondsLeft } from '../lib/live.js';
-import { parseAny, examToText } from '../lib/importer.js';
+import { hub, rosterSnapshot, rosterSnapshotAll, broadcastRoster, finishSession, enforceDeadlines, secondsLeft } from '../lib/live.js';
+import { parseAny, parseExamJson, examToText } from '../lib/importer.js';
 
 export function registerTeacherRoutes(router, { requireAuth }) {
   /* ------------------------------------------------------------------ auth */
@@ -62,6 +63,51 @@ export function registerTeacherRoutes(router, { requireAuth }) {
     sendJson(res, 200, { ok: true });
   });
 
+  /* ---------------------------------------------------------------- exams */
+
+  router.get('/api/teacher/exams', (req, res) => {
+    requireAuth(req);
+    sendJson(res, 200, { exams: listExams(), currentId: getCurrentExamId() });
+  });
+
+  router.post('/api/teacher/exams', async (req, res) => {
+    requireAuth(req);
+    const body = await readJsonBody(req);
+    const title = String(body.title || '').trim() || 'Untitled Exam';
+    const access_code = body.access_code
+      ? String(body.access_code).trim().toUpperCase()
+      : null;
+    if (access_code && findExamByCode(access_code)) {
+      throw new HttpError(409, 'That access code is already used by another exam.');
+    }
+    const exam = createExam({ title, access_code: access_code || undefined });
+    broadcastRoster(true);
+    sendJson(res, 201, { exams: listExams(), currentId: getCurrentExamId(), exam });
+  });
+
+  router.post('/api/teacher/exams/:id/select', (req, res) => {
+    requireAuth(req);
+    const exam = getExam(req.params.id);
+    if (!exam) throw new HttpError(404, 'Exam not found.');
+    setCurrentExamId(exam.id);
+    broadcastRoster(true);
+    sendJson(res, 200, { exams: listExams(), currentId: exam.id });
+  });
+
+  router.post('/api/teacher/exams/:id/duplicate', (req, res) => {
+    requireAuth(req);
+    const copy = duplicateExam(req.params.id);
+    broadcastRoster(true);
+    sendJson(res, 200, { exams: listExams(), currentId: getCurrentExamId(), exam: copy });
+  });
+
+  router.delete('/api/teacher/exams/:id', (req, res) => {
+    requireAuth(req);
+    deleteExam(req.params.id);
+    broadcastRoster(true);
+    sendJson(res, 200, { exams: listExams(), currentId: getCurrentExamId() });
+  });
+
   /* ------------------------------------------------------------ live roster */
 
   router.get('/api/teacher/live', (req, res) => {
@@ -74,7 +120,10 @@ export function registerTeacherRoutes(router, { requireAuth }) {
   router.get('/api/teacher/roster', (req, res) => {
     requireAuth(req);
     enforceDeadlines();
-    sendJson(res, 200, rosterSnapshot());
+    // ?all=1 returns a combined roster of every exam, so the teacher can
+    // monitor several exams at once.
+    const all = req.query?.all === '1' || req.query?.scope === 'all';
+    sendJson(res, 200, all ? rosterSnapshotAll() : rosterSnapshot());
   });
 
   /* -------------------------------------------------------- student detail */
@@ -84,9 +133,9 @@ export function registerTeacherRoutes(router, { requireAuth }) {
     const session = getSession(req.params.token);
     if (!session) throw new HttpError(404, 'Session not found.');
 
-    const settings = getSettings();
+    const settings = getExamSettings(session.exam_id);
     const paper = buildPaper(session, undefined, settings);
-    const grade = gradePaper(paper, session.answers, session.manual_scores);
+    const grade = gradePaper(paper, session.answers, session.manual_scores, session.exam_id);
 
     sendJson(res, 200, {
       session: {
@@ -141,7 +190,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
     const body = await readJsonBody(req);
     const questionId = String(body.questionId || '');
 
-    const settings = getSettings();
+    const settings = getExamSettings(session.exam_id);
     const paper = buildPaper(session, undefined, settings);
     const flat = paper.flatMap((sec) => sec.questions);
     const question = flat.find((q) => q.id === questionId);
@@ -149,7 +198,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
 
     const points = Math.max(0, Math.min(question.points, Number(body.points) || 0));
     const manual = { ...session.manual_scores, [questionId]: { points, note: String(body.note || '') } };
-    const grade = gradePaper(paper, session.answers, manual);
+    const grade = gradePaper(paper, session.answers, manual, session.exam_id);
 
     updateSession(session.token, {
       manual_scores: manual,
@@ -172,7 +221,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
     if (!session) throw new HttpError(404, 'Session not found.');
     const body = await readJsonBody(req);
     const action = String(body.action || '');
-    const settings = getSettings();
+    const settings = getExamSettings(session.exam_id);
 
     if (action === 'extend') {
       const minutes = Math.max(-600, Math.min(600, Number(body.minutes) || 5));
@@ -197,7 +246,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
     }
 
     if (action === 'reopen') {
-      const settings2 = getSettings();
+      const settings2 = getExamSettings(session.exam_id);
       const durationSec = (Number(settings2.duration_minutes) || 60) * 60;
       const startedAt = session.started_at || now();
       updateSession(session.token, {
@@ -226,12 +275,13 @@ export function registerTeacherRoutes(router, { requireAuth }) {
   router.get('/api/teacher/results', (req, res) => {
     requireAuth(req);
     enforceDeadlines();
-    const settings = getSettings();
-    const sessions = listSessions(settings.access_code || undefined);
+    const examId = getCurrentExamId();
+    const settings = getExamSettings(examId);
+    const sessions = listSessions({ exam_id: examId });
     const submitted = sessions.filter((s) => s.status !== 'active');
     const graded = submitted.map((s) => ({
       session: s,
-      ...gradePaper(buildPaper(s, undefined, settings), s.answers, s.manual_scores)
+      ...gradePaper(buildPaper(s, undefined, settings), s.answers, s.manual_scores, s.exam_id)
     }));
 
     const scores = graded.map((g) => g.percent);
@@ -268,7 +318,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
           ? Math.round((g.session.submitted_at - g.session.started_at) / 60000)
           : null
       })),
-      items: itemAnalysis(buildPaper({ order_seed: 0 }, undefined, settings), graded)
+      items: itemAnalysis(buildPaper({ order_seed: 0, exam_id: examId }, undefined, settings), graded)
     });
   });
 
@@ -276,9 +326,10 @@ export function registerTeacherRoutes(router, { requireAuth }) {
 
   router.get('/api/teacher/export.csv', (req, res) => {
     requireAuth(req);
-    const settings = getSettings();
-    const paper = getExamBlueprint();
-    const sessions = listSessions(settings.access_code || undefined);
+    const examId = getCurrentExamId();
+    const settings = getExamSettings(examId);
+    const paper = getExamBlueprint(examId);
+    const sessions = listSessions({ exam_id: examId });
 
     const header = [
       'Student Name', 'Student No', 'Class/Section', 'Status', 'Started', 'Submitted',
@@ -292,7 +343,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
 
     const rows = [header];
     for (const s of sessions) {
-      const grade = gradePaper(buildPaper(s, undefined, settings), s.answers, s.manual_scores);
+      const grade = gradePaper(buildPaper(s, undefined, settings), s.answers, s.manual_scores, s.exam_id);
       const row = [
         s.student_name, s.student_no, s.class_section, s.status,
         s.started_at ? new Date(s.started_at).toISOString() : '',
@@ -339,9 +390,18 @@ export function registerTeacherRoutes(router, { requireAuth }) {
     for (const [key, coerce] of Object.entries(allowed)) {
       if (body[key] !== undefined) patch[key] = coerce(body[key]);
     }
+    // An access code belongs to exactly one exam.
+    if (patch.access_code !== undefined && patch.access_code) {
+      const clash = findExamByCode(patch.access_code);
+      if (clash && clash.id !== getCurrentExamId()) {
+        throw new HttpError(409, 'That access code is already used by another exam.');
+      }
+    }
     if (body.new_access_code) {
       const { makeAccessCode } = await import('../lib/db.js');
-      patch.access_code = makeAccessCode();
+      let code = makeAccessCode();
+      while (findExamByCode(code)) code = makeAccessCode();
+      patch.access_code = code;
     }
     const settings = setSettings(patch);
     broadcastRoster(true);
@@ -384,7 +444,11 @@ export function registerTeacherRoutes(router, { requireAuth }) {
     const contentType = String(req.headers['content-type'] || '');
     if (contentType.includes('application/json')) {
       const body = await readJsonBody(req);
-      const blueprint = replaceExam({ title: body.title, sections: body.sections || [] });
+      // Normalise through the same importer as the paste path, so a JSON body
+      // that is a bare array of questions (or uses "parts"/"items") works too.
+      const parsed = parseExamJson(JSON.stringify(body));
+      if (!parsed.sections.length) throw new HttpError(400, 'No questions could be read from that JSON.');
+      const blueprint = replaceExam({ title: parsed.title, sections: parsed.sections });
       broadcastRoster(true);
       return sendJson(res, 200, { ok: true, counts: countBlueprint(blueprint) });
     }
@@ -404,7 +468,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
   router.post('/api/teacher/reset-attempts', async (req, res) => {
     requireAuth(req);
     await readJsonBody(req).catch(() => ({}));
-    deleteSessionsExceptKeep();
+    deleteSessionsExceptKeep(getCurrentExamId());
     broadcastRoster(true);
     sendJson(res, 200, { ok: true });
   });

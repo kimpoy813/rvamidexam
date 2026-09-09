@@ -9,8 +9,9 @@
  *  - every integrity event is recorded against the session
  */
 import {
-  getSession, createSession, updateSession, getSettings, getExamBlueprint,
-  listSessions, logEvent, now, eventsFor
+  getSession, createSession, updateSession, getSettings, getExamSettings,
+  getExamBlueprint, findExamByCode, listSessions, logEvent, now, eventsFor,
+  verifyTeacher
 } from '../lib/db.js';
 import { buildPaper, gradePaper } from '../lib/exam.js';
 import { HttpError, sendJson, readJsonBody, clientIp } from '../lib/http.js';
@@ -20,6 +21,16 @@ import {
 
 export function registerStudentRoutes(router) {
   /* ------------------------------------------------------------- exam info */
+
+  router.get('/api/public/auth-hint', (req, res) => {
+    // Tells the teacher sign-in page whether the well-known default password is
+    // still active, so the "Default: teacher / rvm-exam-2026" hint can hide
+    // itself once the password has been changed in the dashboard.
+    const username = process.env.EXAM_TEACHER_USER || 'teacher';
+    const stillDefault =
+      !process.env.EXAM_TEACHER_PASSWORD && !!verifyTeacher(username, 'rvm-exam-2026');
+    sendJson(res, 200, { showDefaultHint: stillDefault });
+  });
 
   router.get('/api/public/exam-info', (req, res) => {
     enforceDeadlines();
@@ -55,8 +66,6 @@ export function registerStudentRoutes(router) {
 
   router.post('/api/sessions', async (req, res) => {
     enforceDeadlines();
-    const s = getSettings();
-    if (s.exam_open !== '1') throw new HttpError(403, 'This exam is currently closed.');
 
     const body = await readJsonBody(req);
     const code = String(body.access_code || '').trim().toUpperCase();
@@ -65,13 +74,16 @@ export function registerStudentRoutes(router) {
     const classSection = String(body.class_section || '').trim();
 
     if (!code) throw new HttpError(400, 'Please enter the exam access code.');
-    if (s.access_code && code !== s.access_code.toUpperCase()) {
-      throw new HttpError(403, 'That access code is not valid.');
-    }
     if (name.length < 2) throw new HttpError(400, 'Please enter your full name.');
     if (studentNo.length < 2) throw new HttpError(400, 'Please enter your student number.');
 
-    const existing = listSessions().filter(
+    // The access code decides which exam this student joins.
+    const exam = findExamByCode(code);
+    if (!exam) throw new HttpError(403, 'That access code is not valid.');
+    const s = exam.settings;
+    if (s.exam_open !== '1') throw new HttpError(403, 'This exam is currently closed.');
+
+    const existing = listSessions({ exam_id: exam.id }).filter(
       (x) => x.status === 'active' &&
              x.student_no.toLowerCase() === studentNo.toLowerCase() &&
              x.class_section.toLowerCase() === classSection.toLowerCase()
@@ -98,7 +110,8 @@ export function registerStudentRoutes(router) {
     }
 
     const session = createSession({
-      access_code: code,
+      exam_id: exam.id,
+      access_code: exam.access_code,
       student_name: name,
       student_no: studentNo,
       class_section: classSection,
@@ -131,7 +144,7 @@ export function registerStudentRoutes(router) {
   };
 
   const paperFor = (session) => {
-    const s = getSettings();
+    const s = getExamSettings(session.exam_id);
     return { session: fresh(session), settings: s, paper: buildPaper(session, undefined, s) };
   };
 
@@ -148,7 +161,7 @@ export function registerStudentRoutes(router) {
 
   router.post('/api/s/:token/start', (req, res) => {
     const session = load(req.params.token);
-    const s = getSettings();
+    const s = getExamSettings(session.exam_id);
     const durationSec = (Number(s.duration_minutes) || 60) * 60;
 
     if (!session.started_at) {
@@ -184,6 +197,7 @@ export function registerStudentRoutes(router) {
       sections: paper.map((sec, i) => {
         let start = 0;
         for (let k = 0; k < i; k++) start += paper[k].questions.length;
+        const locking = settings.lock_sections === '1';
         return {
           index: i,
           title: sec.title,
@@ -191,7 +205,8 @@ export function registerStudentRoutes(router) {
           start,
           count: sec.questions.length,
           locked: i < session.max_section && !!sec.lock_after,
-          reachable: i <= session.max_section,
+          // With free navigation (locking off) every section is reachable.
+          reachable: locking ? i <= session.max_section : true,
           questions: sec.questions.map((q, qi) => ({
             index: start + qi,
             id: q.id,
@@ -205,7 +220,7 @@ export function registerStudentRoutes(router) {
       ),
       grade: session.status === 'active'
         ? null
-        : gradePaper(paper, session.answers, session.manual_scores)
+        : gradePaper(paper, session.answers, session.manual_scores, session.exam_id)
     });
   });
 
@@ -330,12 +345,13 @@ export function registerStudentRoutes(router) {
     const target = Math.max(0, Math.min(total - 1, Number(body.index) || 0));
     const targetSection = sectionIndexFor(paper, target);
 
-    // Students may step forward one section at a time (that is the "Next
-    // section" button) but cannot skip ahead to a later part of the paper.
-    if (targetSection > session.max_section + 1) {
+    // With free navigation (section locking off) the student may jump to any
+    // question. When locking is on, keep the linear one-section-at-a-time flow.
+    const locking = settings.lock_sections === '1';
+    if (locking && targetSection > session.max_section + 1) {
       throw new HttpError(403, 'Finish the current section before moving on.');
     }
-    if (targetSection < session.max_section && paper[targetSection].lock_after) {
+    if (locking && targetSection < session.max_section && paper[targetSection].lock_after) {
       throw new HttpError(403, `"${paper[targetSection].title}" is locked and cannot be revisited.`);
     }
 
@@ -375,7 +391,7 @@ export function registerStudentRoutes(router) {
   router.post('/api/s/:token/heartbeat', async (req, res) => {
     let session = load(req.params.token);
     const body = await readJsonBody(req);
-    const s = getSettings();
+    const s = getExamSettings(session.exam_id);
     const prev = heartbeatState.get(session.token) || {};
 
     const next = {
@@ -437,10 +453,10 @@ export function registerStudentRoutes(router) {
   router.get('/api/s/:token/result', (req, res) => {
     const session = load(req.params.token, { allowSubmitted: true });
     if (session.status === 'active') throw new HttpError(409, 'Exam is still in progress.');
-    const s = getSettings();
+    const s = getExamSettings(session.exam_id);
     const revealed = s.show_result_to_student === '1';
     const paper = buildPaper(session, undefined, s);
-    const grade = gradePaper(paper, session.answers, session.manual_scores);
+    const grade = gradePaper(paper, session.answers, session.manual_scores, session.exam_id);
 
     sendJson(res, 200, {
       studentName: session.student_name,

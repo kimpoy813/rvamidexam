@@ -49,6 +49,9 @@ async function boot() {
   $('#barStudent').textContent = [sessionStorage.getItem('rvm_name'), sessionStorage.getItem('rvm_no')]
     .filter(Boolean).join(' · ') || 'Candidate';
 
+  // Full screen is optional — hide the button unless the teacher opted in.
+  if (!state.info.requireFullscreen) $('#fsBtn').classList.add('hidden');
+
   $('#totalCount').textContent = state.paper.total;
   renderSidebar();
   updateProgress();
@@ -109,7 +112,9 @@ function renderPalette() {
         q.index === state.cursor ? 'current' : '',
         sec.locked ? 'locked' : ''
       ].join(' ');
-      const reachable = sec.index <= state.paper.maxSection && !sec.locked;
+      const reachable = state.info.lockSections
+        ? sec.index <= state.paper.maxSection && !sec.locked
+        : true;
       return `<button class="${cls}" data-i="${q.index}" ${reachable ? '' : 'disabled'}
         title="Question ${q.index + 1} · ${escapeHtml(sec.title)}">${q.index + 1}</button>`;
     })
@@ -332,9 +337,19 @@ function wireTextarea(q) {
   el.addEventListener('input', () => {
     update();
     clearTimeout(t);
+    state.dirty = { id: q.id, value: el.value };
     t = setTimeout(() => saveAnswer(q.id, el.value), 700);
   });
   el.addEventListener('blur', () => saveAnswer(q.id, el.value));
+}
+
+/** Sends any text answer the debounce has not flushed yet. */
+async function flushDirty() {
+  if (state.dirty && !state.finished) {
+    const { id, value } = state.dirty;
+    state.dirty = null;
+    await saveAnswer(id, value);
+  }
 }
 
 /* ================================================================== saving */
@@ -353,6 +368,7 @@ async function saveAnswer(questionId, value) {
       body: { questionId, value }
     });
     state.paper.answers[questionId] = value;
+    if (state.dirty && state.dirty.id === questionId) state.dirty = null;
     state.secondsLeft = Math.min(state.secondsLeft, res.secondsLeft);
     setSaveState('saved', `Saved · ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
     updateProgress();
@@ -366,6 +382,7 @@ async function saveAnswer(questionId, value) {
 
 async function goto(index) {
   if (index < 0 || index >= state.paper.total) return;
+  await flushDirty();
   try {
     const res = await api(`/api/s/${token}/goto`, { method: 'POST', body: { index } });
     state.paper.maxSection = res.maxSection;
@@ -380,7 +397,7 @@ async function goto(index) {
 function refreshLocks() {
   state.paper.sections.forEach((sec, i) => {
     sec.locked = i < state.paper.maxSection && state.info.lockSections;
-    sec.reachable = i <= state.paper.maxSection;
+    sec.reachable = state.info.lockSections ? i <= state.paper.maxSection : true;
   });
   renderSidebar();
 }
@@ -390,19 +407,7 @@ $('#prevBtn').addEventListener('click', () => goto(state.cursor - 1));
 $('#nextBtn').addEventListener('click', async () => {
   const next = state.cursor + 1;
   if (next >= state.paper.total) return beginSubmit();
-
-  const movingToSection = sectionOf(next) !== sectionOf(state.cursor);
-  if (movingToSection) {
-    const current = state.paper.sections[sectionOf(state.cursor)];
-    const blank = current.questions.filter((q) => !isAnswered(q.id)).length;
-    const warning = state.info.lockSections
-      ? `${current.title} will be locked and you will not be able to return to it.`
-      : `You are moving on to the next section.`;
-    const ok = confirm(
-      `${blank ? `You have ${blank} unanswered question${blank === 1 ? '' : 's'} in this section.\n\n` : ''}${warning}\n\nContinue?`
-    );
-    if (!ok) return;
-  }
+  // Moving between parts is friction-free: no confirmation, no penalty.
   goto(next);
 });
 
@@ -427,6 +432,7 @@ async function beginSubmit() {
 
 async function submit(auto) {
   if (state.finished) return;
+  await flushDirty();
   state.finished = true;
   clearInterval(timerInterval);
   stopHeartbeat();

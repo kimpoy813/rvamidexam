@@ -7,8 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  db, getSettings, setSettings, ensureTeacher, makeAccessCode,
-  getExamBlueprint, replaceExam, now
+  db, getSettings, setSettings, ensureTeacher, verifyTeacher, makeAccessCode,
+  getExamBlueprint, replaceExam, now, ensureExamExists, getCurrentExamId, listExams
 } from './lib/db.js';
 import { createRouter, sendJson, serveStatic, HttpError } from './lib/http.js';
 import { registerStudentRoutes } from './routes/student.js';
@@ -28,16 +28,18 @@ function bootstrap() {
   const generated = !process.env.EXAM_TEACHER_PASSWORD;
   const password = process.env.EXAM_TEACHER_PASSWORD || 'rvm-exam-2026';
   ensureTeacher(username, password);
+  // True only while the teacher is still signing in with the well-known
+  // default password — once they change it in the dashboard this flips off,
+  // so the startup banner stops advertising a password that no longer works.
+  const defaultPasswordActive = verifyTeacher(username, password);
 
-  const settings = getSettings();
-  if (!settings.access_code) setSettings({ access_code: makeAccessCode() });
-
-  if (!getExamBlueprint().length) {
-    replaceExam(SAMPLE_EXAM);
+  const examId = ensureExamExists();
+  if (!getExamBlueprint(examId).length) {
+    replaceExam(SAMPLE_EXAM, examId);
     console.log('[exam] No question bank found — loaded the sample exam.');
   }
 
-  return { username, password, generated };
+  return { username, password, generated, defaultPasswordActive };
 }
 
 const creds = bootstrap();
@@ -99,7 +101,8 @@ sweeper.unref?.();
 
 server.listen(PORT, HOST, () => {
   const s = getSettings();
-  const bank = getExamBlueprint();
+  const bank = getExamBlueprint(getCurrentExamId());
+  const exams = listExams();
   const counts = {
     sections: bank.length,
     questions: bank.reduce((n, x) => n + x.questions.length, 0),
@@ -113,11 +116,16 @@ server.listen(PORT, HOST, () => {
   console.log(`  Teacher    http://localhost:${PORT}/teacher`);
   console.log(`  Questions  http://localhost:${PORT}/admin`);
   console.log('  ─────────────────────────────────────────────');
+  console.log(`  Exams        ${exams.length} (create more in the dashboard)`);
   console.log(`  Exam title   ${s.exam_title}`);
   console.log(`  Access code  ${s.access_code}`);
   console.log(`  Duration     ${s.duration_minutes} minutes`);
   console.log(`  Question bank ${counts.sections} sections · ${counts.questions} items · ${counts.points} pts`);
-  console.log(`  Teacher      ${creds.username} / ${creds.password}${creds.generated ? '  (default — change it in the dashboard)' : ''}`);
+  if (creds.defaultPasswordActive) {
+    console.log(`  Teacher      ${creds.username} / ${creds.password}${creds.generated ? '  (default — change it in the dashboard)' : ''}`);
+  } else {
+    console.log(`  Teacher      ${creds.username} (a custom password is in use)`);
+  }
   console.log('');
 });
 

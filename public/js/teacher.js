@@ -14,11 +14,15 @@ const state = {
   roster: null,
   results: null,
   settings: null,
+  exams: [],
+  currentExamId: null,
   filter: 'all',
   search: '',
   tab: 'live',
+  scope: 'current',   // 'current' = monitor the selected exam, 'all' = every exam
   sse: null,
   poll: null,
+  allPoll: null,
   lastFeedAt: 0,
   drawerToken: null
 };
@@ -26,6 +30,12 @@ const state = {
 /* ==================================================================== auth */
 
 async function init() {
+  // Only show the "Default: teacher / rvm-exam-2026" hint while that default
+  // password is actually still in use.
+  api('/api/public/auth-hint').then((hint) => {
+    $('#defaultHint').classList.toggle('hidden', !hint.showDefaultHint);
+  }).catch(() => {});
+
   if (!localStorage.getItem('rvm_teacher_token')) return showLogin();
   try {
     const me = await api('/api/teacher/me');
@@ -48,11 +58,124 @@ function showApp() {
   $('#loginView').classList.add('hidden');
   $('#appView').classList.remove('hidden');
   connect();
+  loadExams();
   loadSettings();
   loadExam();
   refreshResults();
   setInterval(() => paintRoster(state.roster), 1000); // keep "ago" labels fresh
 }
+
+/* ================================================================== exams */
+
+async function loadExams() {
+  try {
+    const res = await api('/api/teacher/exams');
+    state.exams = res.exams;
+    state.currentExamId = res.currentId;
+    paintExams();
+  } catch (err) {
+    if (err.status === 401) showLogin();
+  }
+}
+
+function paintExams() {
+  const current = state.exams.find((e) => e.id === state.currentExamId) || state.exams[0];
+
+  $('#examSelect').innerHTML = state.exams.map((e) =>
+    `<option value="${e.id}" ${e.id === state.currentExamId ? 'selected' : ''}>${escapeHtml(e.title)}</option>`
+  ).join('');
+
+  if (current) {
+    $('#dTitle').textContent = current.title;
+    $('#codeText').textContent = current.access_code || '—';
+  }
+  $('#examCount').textContent = `${state.exams.length} exam${state.exams.length === 1 ? '' : 's'}`;
+
+  $('#examBody').innerHTML = state.exams.map((e) => {
+    const isCurrent = e.id === state.currentExamId;
+    return `<tr>
+      <td>
+        <div style="font-weight:650">${escapeHtml(e.title)}${isCurrent
+          ? ' <span class="pill pill-live" style="margin-left:6px"><span class="pill-dot"></span>active</span>'
+          : ''}</div>
+      </td>
+      <td class="mono">${escapeHtml(e.access_code || '—')}</td>
+      <td class="small muted">${e.counts.questions} items · ${e.counts.points} pts</td>
+      <td><span class="pill ${e.settings.exam_open === '1' ? 'pill-done' : 'pill-idle'}"><span class="pill-dot"></span>${e.settings.exam_open === '1' ? 'open' : 'closed'}</span></td>
+      <td style="white-space:nowrap">
+        ${isCurrent ? '' : `<button class="btn btn-ghost btn-sm" data-use="${e.id}">Use</button>`}
+        <button class="btn btn-ghost btn-sm" data-dup="${e.id}">Duplicate</button>
+        <button class="btn btn-ghost btn-sm" data-del="${e.id}" ${state.exams.length <= 1 ? 'disabled' : ''}>Delete</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  $$('#examBody [data-use]').forEach((b) =>
+    b.addEventListener('click', () => switchExam(b.dataset.use)));
+  $$('#examBody [data-dup]').forEach((b) =>
+    b.addEventListener('click', () => duplicateExamRow(b.dataset.dup)));
+  $$('#examBody [data-del]').forEach((b) =>
+    b.addEventListener('click', () => deleteExamRow(b.dataset.del)));
+}
+
+async function switchExam(id) {
+  if (id === state.currentExamId) return;
+  try {
+    await api(`/api/teacher/exams/${id}/select`, { method: 'POST', body: {} });
+    await reloadForExam();
+    toast('Switched exam.', 'ok');
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+}
+
+async function reloadForExam() {
+  await loadExams();
+  connect(); // re-subscribe the live stream to the new current exam
+  await loadSettings();
+  await loadExam();
+  refreshResults();
+}
+
+async function newExam() {
+  const title = prompt('New exam title:');
+  if (title === null) return;
+  try {
+    await api('/api/teacher/exams', { method: 'POST', body: { title } });
+    await reloadForExam();
+    switchTab('setup');
+    toast('Exam created. Add its questions in the Question bank below.', 'ok', 4200);
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+}
+
+async function duplicateExamRow(id) {
+  try {
+    await api(`/api/teacher/exams/${id}/duplicate`, { method: 'POST', body: {} });
+    await reloadForExam();
+    toast('Exam duplicated.', 'ok');
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+}
+
+async function deleteExamRow(id) {
+  const exam = state.exams.find((e) => e.id === id);
+  if (!exam) return;
+  if (!confirm(`Delete "${exam.title}" and every one of its student attempts?\n\nThis cannot be undone.`)) return;
+  try {
+    await api(`/api/teacher/exams/${id}`, { method: 'DELETE' });
+    await reloadForExam();
+    toast('Exam deleted.', 'ok');
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+}
+
+$('#examSelect').addEventListener('change', (e) => switchExam(e.target.value));
+$('#newExamBtn').addEventListener('click', newExam);
+$('#newExamBtn2').addEventListener('click', newExam);
 
 $('#loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -102,6 +225,9 @@ function connect() {
     state.sse = es;
 
     es.addEventListener('roster', (ev) => {
+      // In "All exams" mode the combined poll drives the view; the SSE stream
+      // still carries only the selected exam, so ignore it.
+      if (state.scope === 'all') return;
       applyRoster(JSON.parse(ev.data));
       setConn(true, 'Live');
     });
@@ -119,6 +245,7 @@ function disconnect() {
   state.sse?.close();
   state.sse = null;
   stopPolling();
+  stopAllPolling();
 }
 
 function startPolling() {
@@ -138,6 +265,37 @@ function stopPolling() {
   state.poll = null;
 }
 
+/* Combined "all exams" monitoring — polls the aggregated roster. */
+function startAllPolling() {
+  if (state.allPoll) return;
+  const fetchAll = async () => {
+    try {
+      applyRoster(await api('/api/teacher/roster?all=1'));
+      setConn(true, 'All exams · live');
+    } catch {
+      setConn(false, 'Offline');
+    }
+  };
+  fetchAll();
+  state.allPoll = setInterval(fetchAll, 2500);
+}
+
+function stopAllPolling() {
+  clearInterval(state.allPoll);
+  state.allPoll = null;
+}
+
+$('#scopeSelect').addEventListener('change', (e) => {
+  state.scope = e.target.value;
+  if (state.scope === 'all') {
+    startAllPolling();
+  } else {
+    stopAllPolling();
+    // Refresh the selected exam's roster immediately.
+    api('/api/teacher/roster').then(applyRoster).catch(() => {});
+  }
+});
+
 function setConn(ok, label) {
   $('#conn').classList.toggle('off', !ok);
   $('#connText').textContent = label;
@@ -150,7 +308,7 @@ function applyRoster(data) {
   paintFeed(data.feed || []);
 
   const s = data.summary;
-  $('#rosterCount').textContent = `${s.total} joined`;
+  $('#rosterCount').textContent = `${s.total} joined${s.examCount ? ` · ${s.examCount} exams` : ''}`;
   $('#tabManual').textContent = s.needsManual;
   $('#tabManual').classList.toggle('hidden', !s.needsManual);
   const pill = $('#examOpenPill');
@@ -172,23 +330,46 @@ function paintRoster(data) {
   if (!data) return;
   const s = data.summary;
 
-  $('#kpis').innerHTML = [
+  const cards = [
     { l: 'Online now', v: s.online, sub: `${s.inProgress} in progress`, c: 'var(--ok)' },
-    { l: 'Joined', v: s.total, sub: `${s.paperTotal} questions each`, c: 'var(--brand)' },
+    { l: 'Joined', v: s.total, sub: s.examCount ? `${s.examCount} exams` : `${s.paperTotal} questions each`, c: 'var(--brand)' },
     { l: 'Submitted', v: s.submitted, sub: s.total ? `${Math.round((s.submitted / s.total) * 100)}% of class` : '—', c: 'var(--violet)' },
     { l: 'Average progress', v: `${Math.round(s.averageProgress * 100)}%`, sub: 'of those still writing', c: 'var(--info)' },
     { l: 'Needs grading', v: s.needsManual, sub: 'essay / manual items', c: 'var(--warn)' },
     { l: 'Integrity flags', v: s.flagged, sub: `${s.violations} total events`, c: 'var(--bad)' },
     { l: 'Average score', v: s.averagePercent === null ? '—' : `${s.averagePercent}%`,
       sub: s.highest === null ? 'no submissions yet' : `high ${s.highest}% · low ${s.lowest}%`, c: 'var(--ok)' }
-  ].map((k) => `
+  ];
+  if (s.examCount) {
+    cards.unshift({ l: 'Live exams', v: s.examCount, sub: 'being monitored', c: 'var(--brand)' });
+  }
+
+  $('#kpis').innerHTML = cards.map((k) => `
     <div class="kpi" style="--accent:${k.c}">
       <div class="kpi-label">${k.l}</div>
       <div class="kpi-value">${k.v}</div>
       <div class="kpi-sub">${k.sub}</div>
     </div>`).join('');
 
+  paintExamStrip(data.exams);
   paintStudents(data.students);
+}
+
+function paintExamStrip(exams) {
+  const el = $('#examStrip');
+  if (!el) return;
+  if (!exams || !exams.length) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  el.style.display = 'block';
+  el.innerHTML = exams.map((e) => `
+    <span class="pill ${e.examOpen ? 'pill-live' : 'pill-idle'}" style="margin:0 6px 6px 0">
+      <span class="pill-dot"></span>${escapeHtml(e.title)}
+      <span class="mono" style="opacity:.8"> ${escapeHtml(e.accessCode)}</span>
+      <b style="margin-left:4px">${e.inProgress} writing</b> / ${e.submitted} done
+    </span>`).join('');
 }
 
 function paintStudents(students) {
@@ -251,6 +432,7 @@ function paintStudents(students) {
       <div style="min-width:0">
         <div class="sname">${escapeHtml(st.name)}</div>
         <div class="smeta">${escapeHtml(st.studentNo)}${st.classSection ? ' · ' + escapeHtml(st.classSection) : ''}</div>
+        ${st.examTitle ? `<div class="smeta" style="color:var(--brand);font-weight:650">${escapeHtml(st.examTitle)}</div>` : ''}
       </div>
 
       <div>

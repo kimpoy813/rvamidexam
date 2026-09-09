@@ -32,7 +32,7 @@
           Sign in
         </button>
       </form>
-      <p class="tiny muted center" style="margin-top:16px">
+      <p class="tiny muted center hidden" id="defaultHint" style="margin-top:16px">
         Default: <span class="mono">teacher</span> / <span class="mono">rvm-exam-2026</span><br>
         Change it right after your first sign in.
       </p>
@@ -51,6 +51,11 @@
           <span class="brand-text" id="dTitle">Midterm Examination</span>
           <span class="brand-sub" id="dSub">Teacher dashboard</span>
         </div>
+      </div>
+
+      <div class="exam-switch">
+        <select id="examSelect" title="Active exam"></select>
+        <button class="btn btn-ghost btn-sm" id="newExamBtn" type="button">+ New</button>
       </div>
 
       <div class="code-chip" id="codeChip" title="Give this code to your students">
@@ -88,6 +93,11 @@
             <h2>Students</h2>
             <span class="pill pill-idle" id="rosterCount">0 joined</span>
             <div class="spacer"></div>
+            <select id="scopeSelect" title="Monitor one exam or every exam at once"
+                    style="width:auto;padding:7px 11px;font-size:13.5px">
+              <option value="current">This exam</option>
+              <option value="all">All exams</option>
+            </select>
             <input type="text" id="rosterSearch" placeholder="Search name or number…"
                    style="width:210px;padding:7px 11px;font-size:13.5px">
             <select id="rosterFilter" style="width:auto;padding:7px 11px;font-size:13.5px">
@@ -100,6 +110,7 @@
             </select>
           </div>
           <div style="padding:14px">
+            <div id="examStrip" style="display:none"></div>
             <div class="roster" id="roster"></div>
           </div>
         </div>
@@ -176,7 +187,28 @@
 
     <!-- ======================================================== SETUP -->
     <section id="tab-setup" class="hidden">
-      <div class="setup-grid">
+
+      <!-- exam manager -->
+      <div class="card panel" style="overflow:hidden">
+        <div class="panel-head">
+          <h2>Your exams</h2>
+          <span class="pill pill-idle" id="examCount">—</span>
+          <div class="spacer"></div>
+          <button class="btn btn-primary btn-sm" id="newExamBtn2" type="button">+ New exam</button>
+        </div>
+        <div class="table-wrap" style="border:none;border-radius:0">
+          <table>
+            <thead>
+              <tr>
+                <th>Exam</th><th>Access code</th><th>Questions</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="examBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="setup-grid" style="margin-top:18px">
 
         <div class="card" style="overflow:hidden">
           <div class="panel-head"><h2>Exam details</h2></div>

@@ -2,7 +2,7 @@
  * Exam engine: deterministic per-student randomisation, one-question-at-a-time
  * delivery, and automatic grading.
  */
-import { getExamBlueprint, getSettings, getQuestions } from './db.js';
+import { getExamBlueprint, getExamSettings, getQuestions } from './db.js';
 
 /* --------------------------------------------------------------- shuffling */
 
@@ -43,7 +43,10 @@ export function hashString(str) {
  * student (seeded), choice order is shuffled per question. The result is stable
  * for the life of the session, so refreshing never reshuffles the paper.
  */
-export function buildPaper(session, blueprint = getExamBlueprint(), settings = getSettings()) {
+export function buildPaper(session, blueprint, settings) {
+  const examId = session?.exam_id;
+  if (!blueprint) blueprint = getExamBlueprint(examId);
+  if (!settings) settings = getExamSettings(examId);
   const shuffleQuestions = settings.shuffle_questions === '1';
   const shuffleChoices = settings.shuffle_choices === '1';
 
@@ -211,7 +214,7 @@ function match(a, b) {
  * Grades a whole submitted paper.
  * @returns {{score, max, pending, items: Object}}
  */
-export function gradePaper(paper, answers, manualScores = {}) {
+export function gradePaper(paper, answers, manualScores = {}, examId) {
   let score = 0;
   let max = 0;
   let pending = 0;
@@ -220,7 +223,7 @@ export function gradePaper(paper, answers, manualScores = {}) {
   // A student's paper never carries the answer key (see buildPaper), so the key
   // is resolved here from the authoritative bank. Grading can therefore not
   // silently depend on whatever the student-facing shape happens to contain.
-  const bank = new Map(getQuestions().map((q) => [q.id, q]));
+  const bank = new Map(getQuestions(examId).map((q) => [q.id, q]));
 
   for (const section of paper) {
     for (const q of section.questions) {

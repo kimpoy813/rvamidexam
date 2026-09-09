@@ -53,11 +53,19 @@ const TRUE_FALSE_KEY = /^(true|false|t|f|yes|no|tama|mali)$/i;
 // Mirrors PART_HEADING in tools/doc2exam.py.
 const PART_HEADING =
   /^\s*(?:#{1,3}\s*)?(?:part\s+([ivxlcdm]+|\d+)\s*[.)\-:–—]?\s*|([ivxlcdm]+|\d+)\s*[.)\-:–—]\s*)([A-Za-z][A-Za-z /&,'’()\-]{2,60})\s*$/i;
+// "Part N. <label>" — the label may be any words (quotes, question marks and
+// custom names included), so a part is never mistaken for the exam title.
+const PART_PREFIX = /^\s*(?:#{1,3}\s*)?part\s+([ivxlcdm]+|\d+)\s*[.)\-:–—]?\s*([^\s].*?)\s*$/i;
 const SECTION_WORDS = [
   'multiple choice', 'multiple-choice', 'true or false', 'true/false',
   'identification', 'matching', 'essay', 'short answer', 'fill in', 'fill-in',
   'problem solving', 'computation', 'enumeration', 'modified', 'analogy'
 ];
+
+/** Python str.title() equivalent, so headings normalise the same way. */
+function titleCaseWords(s) {
+  return s.replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase());
+}
 
 /**
  * Recognise a part heading and return its normalised title, or null.
@@ -66,14 +74,22 @@ const SECTION_WORDS = [
  * Motion". Mirrors looks_like_part() in tools/doc2exam.py.
  */
 function looksLikePart(line) {
-  const m = String(line).match(PART_HEADING);
+  const str = String(line).trim();
+
+  // A heading that literally starts with "Part N." is unambiguously a part,
+  // whatever it is called ("Word Scramble", "Number Puzzle", …).
+  const pm = str.match(PART_PREFIX);
+  if (pm) {
+    const label = pm[2].replace(/^[.:,\-]+|[.:,\-]+$/g, '').trim();
+    if (label) return `Part ${pm[1].toUpperCase()}. ${titleCaseWords(label)}`;
+  }
+
+  const m = str.match(PART_HEADING);
   if (m) {
     const label = (m[3] || '').trim().replace(/^[.:,\-]+|[.:,\-]+$/g, '');
     if (SECTION_WORDS.some((w) => label.toLowerCase().includes(w))) {
       const num = (m[1] || m[2] || '').toUpperCase();
-      // Match Python's str.title() so the dashboard and tools/doc2exam.py
-      // normalise a heading the same way: "MULTIPLE CHOICE" -> "Multiple Choice".
-      return `Part ${num}. ${label.replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase())}`;
+      return `Part ${num}. ${titleCaseWords(label)}`;
     }
   }
   return null;
@@ -344,7 +360,7 @@ export function parseExamText(text, fallbackTitle = 'Imported Exam') {
     .map((sec) => ({
       title: sec.title,
       instructions: sec.instructions.trim(),
-      questions: sec.questions.map((q, i) => resolveQuestion(q, sec, i, warnings))
+      questions: uniformizeSection(sec.questions.map((q, i) => resolveQuestion(q, sec, i, warnings)))
     }))
     .filter((sec) => sec.questions.length);
 
@@ -353,6 +369,31 @@ export function parseExamText(text, fallbackTitle = 'Imported Exam') {
   }
 
   return { title, sections: resolved, warnings, keyApplied };
+}
+
+/**
+ * A "True or False" section can be answered by writing: the key lists TRUE or
+ * FALSE plus the word that should have been written (e.g. "FALSE | READING").
+ * When any item in a section is answered that way, turn every pure True/False
+ * item in the same section into a text-entry item too, so the whole section is
+ * typed rather than a confusing mix of buttons and inputs.
+ */
+function uniformizeSection(questions) {
+  const writeStyle = questions.some((q) => q.mixedBoolean);
+  return questions.map((q) => {
+    delete q.mixedBoolean;
+    if (writeStyle && q.kind === 'truefalse') {
+      return {
+        kind: 'short',
+        prompt: q.prompt,
+        points: q.points,
+        choices: [],
+        answer: q.answer === 'True' ? 'TRUE' : 'FALSE',
+        shuffle: false
+      };
+    }
+    return q;
+  });
 }
 
 function resolveQuestion(q, sec, index, warnings) {
@@ -391,8 +432,9 @@ function resolveQuestion(q, sec, index, warnings) {
   // No choices: use the answer line (if any).
   if (q.answerLine) {
     const alternatives = q.answerLine.split('|').map((s) => s.trim()).filter(Boolean);
-    const looksBoolean = alternatives.every((a) => /^(true|false|t|f|yes|no|tama|mali)$/i.test(a));
-    if (looksBoolean) {
+    const booleanCount = alternatives.filter((a) => TRUE_FALSE_KEY.test(a)).length;
+    const allBoolean = alternatives.length > 0 && booleanCount === alternatives.length;
+    if (allBoolean) {
       const right = /^(true|t|yes|tama)$/i.test(alternatives[0]);
       return {
         kind: 'truefalse',
@@ -403,13 +445,18 @@ function resolveQuestion(q, sec, index, warnings) {
         shuffle: false
       };
     }
+    // A key like "FALSE | READING" accepts a boolean word OR the word that
+    // should have been written — this item is answered by typing, not by
+    // clicking True/False. Flag it so the whole section can be made uniform.
+    const mixedBoolean = booleanCount > 0 && booleanCount < alternatives.length;
     return {
       kind: 'short',
       prompt: q.prompt,
       points: q.points,
       choices: [],
       answer: alternatives.length > 1 ? alternatives : alternatives[0],
-      shuffle: false
+      shuffle: false,
+      mixedBoolean
     };
   }
 
@@ -420,27 +467,70 @@ function resolveQuestion(q, sec, index, warnings) {
 /* --------------------------------------------------------------------- JSON */
 
 export function parseExamJson(text) {
-  const data = JSON.parse(text);
-  const sections = Array.isArray(data) ? data : data.sections || data.parts;
-  if (!Array.isArray(sections)) throw new Error('JSON must contain a "sections" array.');
+  const data = JSON.parse(String(text).trim());
 
-  return {
-    title: data.title || 'Imported Exam',
-    sections: sections.map((sec, i) => ({
-      title: sec.title || sec.name || `Part ${i + 1}`,
-      instructions: sec.instructions || sec.description || '',
-      lock_after: sec.lock_after !== false,
-      questions: (sec.questions || sec.items || []).map((q) => ({
-        kind: q.kind || (q.choices?.length ? 'mcq' : 'short'),
-        prompt: q.prompt || q.question || q.text || '',
-        choices: q.choices || q.options || [],
-        answer: q.answer ?? q.correct ?? null,
-        points: Number(q.points ?? q.score ?? 1),
-        shuffle: q.shuffle !== false
-      }))
-    })),
-    warnings: []
+  const normalizeQuestion = (q) => {
+    const choices = q.choices || q.options || [];
+    let answer = q.answer ?? q.correct ?? q.correct_answer ?? q.key ?? null;
+
+    // An integer answer is a choice index; resolve it to the option's text.
+    const asIndex = (a) => {
+      if (!choices.length) return a;
+      if (Array.isArray(a)) {
+        return a.map((v) => (Number.isInteger(v) ? choices[v] : v)).filter(Boolean);
+      }
+      if (Number.isInteger(a)) return choices[a] ?? a;
+      return a;
+    };
+    answer = asIndex(answer);
+
+    return {
+      kind: q.kind || (choices.length ? 'mcq' : 'short'),
+      prompt: q.prompt || q.question || q.text || q.stem || '',
+      choices,
+      answer,
+      points: Number(q.points ?? q.score ?? q.marks ?? 1),
+      shuffle: q.shuffle !== false
+    };
   };
+
+  const normalizeSection = (sec, i) => ({
+    title: sec.title || sec.name || `Part ${i + 1}`,
+    instructions: sec.instructions || sec.description || '',
+    lock_after: sec.lock_after !== false,
+    questions: (sec.questions || sec.items || []).map(normalizeQuestion)
+  });
+
+  let title = 'Imported Exam';
+  let sections;
+
+  if (Array.isArray(data)) {
+    const flatQuestions = data.length > 0 && data.every(
+      (x) => x && typeof x === 'object' && !x.questions && !x.items && (x.prompt || x.question || x.text || x.kind)
+    );
+    if (flatQuestions) {
+      // A bare list of questions rather than sections.
+      sections = [{ title: 'Part 1', instructions: '', questions: data.map(normalizeQuestion) }];
+    } else {
+      sections = data.map(normalizeSection);
+    }
+  } else {
+    title = data.title || 'Imported Exam';
+    if (Array.isArray(data.questions)) {
+      // Questions at the top level, without any sections wrapper.
+      sections = [{
+        title: data.title || 'Part 1',
+        instructions: data.instructions || data.description || '',
+        questions: data.questions.map(normalizeQuestion)
+      }];
+    } else {
+      sections = (data.sections || data.parts || []).map(normalizeSection);
+    }
+  }
+
+  if (!sections.length) throw new Error('JSON must contain a "sections" array (or a list of questions).');
+
+  return { title, sections, warnings: [] };
 }
 
 /* ---------------------------------------------------------------------- CSV */

@@ -2,7 +2,10 @@
  * Live roster: turns raw session rows into the snapshot the teacher dashboard
  * renders, and pushes it over SSE whenever something changes.
  */
-import { listSessions, getSettings, now, updateSession, logEvent, getSession, eventsSince } from './db.js';
+import {
+  listSessions, getSettings, getExamSettings, getCurrentExamId, now,
+  updateSession, logEvent, getSession, eventsSince, listExams
+} from './db.js';
 import { buildPaper, gradePaper } from './exam.js';
 import { SseHub } from './http.js';
 
@@ -19,11 +22,10 @@ export function secondsLeft(session, settings = getSettings()) {
 
 /** Auto-submit anyone whose server-side deadline has passed. */
 export function enforceDeadlines() {
-  const settings = getSettings();
   const due = listSessions()
     .filter((s) => s.status === 'active' && s.deadline && s.deadline <= now());
   for (const s of due) {
-    finishSession(s, 'auto_timeout', settings);
+    finishSession(s, 'auto_timeout', getExamSettings(s.exam_id));
   }
   return due.length;
 }
@@ -38,7 +40,7 @@ export function finishSession(session, reason = 'student', settings = getSetting
     : 'submitted';
 
   const paper = buildPaper(session, undefined, settings);
-  const grade = gradePaper(paper, session.answers, session.manual_scores);
+  const grade = gradePaper(paper, session.answers, session.manual_scores, session.exam_id);
 
   const updated = updateSession(session.token, {
     status,
@@ -65,11 +67,12 @@ export function studentSnapshot(session, paper, settings) {
 
   let grade = null;
   if (submitted) {
-    grade = gradePaper(paper, session.answers, session.manual_scores);
+    grade = gradePaper(paper, session.answers, session.manual_scores, session.exam_id);
   }
 
   return {
     token: session.token,
+    examId: session.exam_id,
     shortId: session.token.slice(0, 6).toUpperCase(),
     name: session.student_name,
     studentNo: session.student_no,
@@ -104,9 +107,10 @@ export function studentSnapshot(session, paper, settings) {
 
 /** Full roster + class summary used by both SSE and the polling fallback. */
 export function rosterSnapshot() {
-  const settings = getSettings();
-  const paper = buildPaper({ order_seed: 0 }, undefined, settings); // shape only
-  const sessions = listSessions(settings.access_code || undefined);
+  const examId = getCurrentExamId();
+  const settings = getExamSettings(examId);
+  const paper = buildPaper({ order_seed: 0, exam_id: examId }, undefined, settings); // shape only
+  const sessions = listSessions({ exam_id: examId });
 
   const students = sessions.map((s) => studentSnapshot(s, buildPaper(s, undefined, settings), settings));
 
@@ -115,7 +119,9 @@ export function rosterSnapshot() {
   const scored = done.filter((s) => s.score !== null && !s.needsManual);
 
   const byToken = new Map(students.map((s) => [s.token, s]));
+  const tokens = new Set(byToken.keys());
   const feed = eventsSince(now() - 45 * 60 * 1000)
+    .filter((e) => tokens.has(e.token))
     .slice(-60)
     .reverse()
     .map((e) => ({
@@ -145,6 +151,79 @@ export function rosterSnapshot() {
   };
 
   return { at: now(), summary, students, feed };
+}
+
+/**
+ * A combined roster across every exam, so the teacher can monitor several
+ * exams running at once. Each student is tagged with the exam they belong to,
+ * and the summary carries a per-exam breakdown.
+ */
+export function rosterSnapshotAll() {
+  const exams = listExams();
+  const examById = new Map(exams.map((e) => [e.id, e]));
+  const sessions = listSessions();
+
+  const students = sessions.map((s) => {
+    const settings = examById.get(s.exam_id)?.settings || getExamSettings(s.exam_id);
+    const snap = studentSnapshot(s, buildPaper(s, undefined, settings), settings);
+    snap.examTitle = examById.get(s.exam_id)?.title || 'Unknown exam';
+    return snap;
+  });
+
+  const active = students.filter((s) => !s.submitted);
+  const done = students.filter((s) => s.submitted);
+  const scored = done.filter((s) => s.score !== null && !s.needsManual);
+
+  const byToken = new Map(students.map((s) => [s.token, s]));
+  const tokens = new Set(byToken.keys());
+  const feed = eventsSince(now() - 45 * 60 * 1000)
+    .filter((e) => tokens.has(e.token))
+    .slice(-60)
+    .reverse()
+    .map((e) => ({
+      at: e.at,
+      type: e.type,
+      detail: e.detail,
+      token: e.token,
+      name: byToken.get(e.token)?.name || 'Unknown student'
+    }));
+
+  const perExam = exams.map((e) => {
+    const members = students.filter((s) => s.examId === e.id);
+    const memberActive = members.filter((s) => !s.submitted);
+    return {
+      id: e.id,
+      title: e.title,
+      accessCode: e.access_code,
+      examOpen: e.settings.exam_open === '1',
+      total: members.length,
+      online: memberActive.filter((s) => s.online).length,
+      inProgress: memberActive.length,
+      submitted: members.length - memberActive.length,
+      flagged: members.filter((s) => s.flagged).length
+    };
+  });
+
+  const summary = {
+    total: students.length,
+    online: active.filter((s) => s.online).length,
+    inProgress: active.length,
+    submitted: done.length,
+    needsManual: done.filter((s) => s.needsManual).length,
+    flagged: students.filter((s) => s.flagged).length,
+    violations: students.reduce((n, s) => n + s.violations, 0),
+    averageProgress:
+      active.length ? active.reduce((n, s) => n + s.progress, 0) / active.length : 0,
+    averagePercent:
+      scored.length ? scored.reduce((n, s) => n + s.percent, 0) / scored.length : null,
+    highest: scored.length ? Math.max(...scored.map((s) => s.percent)) : null,
+    lowest: scored.length ? Math.min(...scored.map((s) => s.percent)) : null,
+    examCount: exams.length,
+    paperTotal: null,
+    examOpen: exams.some((e) => e.settings.exam_open === '1')
+  };
+
+  return { at: now(), summary, students, exams: perExam, feed };
 }
 
 /* ------------------------------------------------------- integrity events */
@@ -177,6 +256,7 @@ export function violationLabel(type) {
 export function registerViolation(token, type, detail = '', settings = getSettings()) {
   const session = getSession(token);
   if (!session) return null;
+  settings = getExamSettings(session.exam_id);
 
   const count = session.violations + 1;
   const limit = Number(settings.max_violations) || 0;
