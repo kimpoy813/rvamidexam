@@ -218,6 +218,47 @@ test('locked sections cannot be revisited once locking is enabled', async () => 
   }
 });
 
+test('withheld results are not present anywhere in the student response', async () => {
+  assert.equal(getSettings().show_result_to_student, '0', 'results are hidden by default');
+
+  const j = await call('POST', '/api/sessions', {
+    access_code: accessCode, student_name: 'Ivy Mora', student_no: 'S-008', class_section: '10-StMary'
+  });
+  const token = j.data.token;
+  await call('POST', `/api/s/${token}/start`, {});
+
+  const paper = (await call('GET', `/api/s/${token}/paper`)).data;
+  for (const q of paper.sections[0].questions.slice(0, 3)) {
+    await call('POST', `/api/s/${token}/answer`, { questionId: q.id, value: 0 });
+  }
+  await call('POST', `/api/s/${token}/submit`, { confirm: true });
+
+  // The raw JSON must not contain the mark — hiding it in the UI is not enough,
+  // because the number would still be readable in the network response.
+  const raw = await (await fetch(`${BASE}/api/s/${token}/result`)).text();
+  assert.equal(JSON.parse(raw).summary, null, 'the summary must be omitted entirely');
+  assert.doesNotMatch(raw, /"percent"/, 'no percentage should be sent');
+  assert.doesNotMatch(raw, /"score"/, 'no score should be sent');
+  assert.doesNotMatch(raw, /"correct"\s*:/, 'no correct count should be sent');
+  assert.doesNotMatch(raw, /"awarded"/, 'no per-item marks should be sent');
+
+  // The teacher still sees everything.
+  const detail = (await call('GET', `/api/teacher/session/${token}`, undefined, teacher)).data;
+  assert.ok(detail.grade.max > 0);
+  assert.ok(typeof detail.grade.percent === 'number');
+
+  // Turning results back on restores the student-facing summary.
+  setSettings({ show_result_to_student: '1' });
+  try {
+    const shown = (await call('GET', `/api/s/${token}/result`)).data;
+    assert.equal(shown.showResult, true);
+    assert.ok(shown.summary && shown.summary.max > 0, 'the summary should come back');
+    assert.ok(shown.items.length === 21, 'the item review should come back');
+  } finally {
+    setSettings({ show_result_to_student: '0' });
+  }
+});
+
 test('integrity events are counted and flag the student at the limit', async () => {
   const j = await call('POST', '/api/sessions', {
     access_code: accessCode, student_name: 'Grace Tan', student_no: 'S-005', class_section: '10-StMary'

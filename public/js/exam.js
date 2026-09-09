@@ -462,7 +462,8 @@ async function renderResult() {
   $('#examMain').classList.add('hidden');
   $('.appbar').classList.add('hidden');
 
-  const s = data.summary;
+  // summary is null whenever the teacher has chosen to withhold results.
+  const s = data.summary || { percent: 0, score: 0, max: 0, correct: 0, wrong: 0, manual: 0 };
   const pct = Math.max(0, Math.min(100, s.percent || 0));
   const circ = 2 * Math.PI * 74;
   const stroke = pct >= 75 ? '#059669' : pct >= 60 ? '#d97706' : '#e11d48';

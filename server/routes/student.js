@@ -438,6 +438,7 @@ export function registerStudentRoutes(router) {
     const session = load(req.params.token, { allowSubmitted: true });
     if (session.status === 'active') throw new HttpError(409, 'Exam is still in progress.');
     const s = getSettings();
+    const revealed = s.show_result_to_student === '1';
     const paper = buildPaper(session, undefined, s);
     const grade = gradePaper(paper, session.answers, session.manual_scores);
 
@@ -448,10 +449,12 @@ export function registerStudentRoutes(router) {
       status: session.status,
       submittedAt: session.submitted_at,
       violations: session.violations,
-      showResult: s.show_result_to_student === '1',
+      showResult: revealed,
       events: eventsFor(session.token).filter((e) => e.type.startsWith('violation')),
-      summary: summaryOf(grade),
-      items: s.show_result_to_student === '1'
+      // Withheld marks must not reach the browser at all — hiding them in the
+      // UI still leaves the number readable in the network response.
+      summary: revealed ? summaryOf(grade) : null,
+      items: revealed
         ? Object.values(grade.items).map((it) => ({
             prompt: it.prompt,
             kind: it.kind,
