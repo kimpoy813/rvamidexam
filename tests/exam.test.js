@@ -296,6 +296,39 @@ test('integrity events are counted and flag the student at the limit', async () 
   assert.equal(me.violations, limit + 1);
 });
 
+test('heartbeat only flags hidden tabs, not focus or fullscreen changes', async () => {
+  const j = await call('POST', '/api/sessions', {
+    access_code: accessCode, student_name: 'Hana Lim', student_no: 'S-005B', class_section: '10-StMary'
+  });
+  const token = j.data.token;
+  await call('POST', `/api/s/${token}/start`, {});
+
+  const seen = await call('POST', `/api/s/${token}/heartbeat`, {
+    visible: true,
+    fullscreen: true,
+    focus: true
+  });
+  assert.equal(seen.status, 200);
+  assert.equal(seen.data.violations, 0);
+
+  const stillClean = await call('POST', `/api/s/${token}/heartbeat`, {
+    visible: true,
+    fullscreen: false,
+    focus: false
+  });
+  assert.equal(stillClean.status, 200);
+  assert.equal(stillClean.data.violations, 0,
+    'only leaving the tab should count as a browser-side violation');
+
+  const hidden = await call('POST', `/api/s/${token}/heartbeat`, {
+    visible: false,
+    fullscreen: false,
+    focus: false
+  });
+  assert.equal(hidden.status, 200);
+  assert.equal(hidden.data.violations, 1);
+});
+
 test('the live roster reports progress in real time', async () => {
   const roster = (await call('GET', '/api/teacher/roster', undefined, teacher)).data;
   assert.ok(roster.students.length >= 5);

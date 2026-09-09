@@ -19,7 +19,7 @@ async function loadInfo() {
 
   const bits = [info.subject, info.term].filter(Boolean);
   $('#heroMeta').textContent =
-    bits.length ? bits.join(' · ') : 'Answer honestly. Your work is monitored and recorded.';
+    bits.length ? bits.join(' · ') : 'Answer honestly. Leaving the exam tab and clipboard attempts are recorded.';
 
   $('#heroStats').innerHTML = [
     { k: 'Time limit', v: `${info.durationMinutes} min` },
