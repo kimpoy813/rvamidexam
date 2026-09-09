@@ -228,7 +228,8 @@ public/
   js/         student-entry.js  exam.js  teacher.js  util.js
 tests/
   exam.test.js           API end-to-end tests against a real server
-  ui.test.js             drives the real pages in jsdom
+  ui.test.js             drives the student pages in jsdom
+  teacher-ui.test.js     drives the teacher dashboard in jsdom
 ```
 
 ## Tests
@@ -238,7 +239,7 @@ npm install     # only needed for jsdom
 npm test
 ```
 
-25 tests, all against a real server on a temporary database.
+30 tests, all against a real server on a temporary database (~26s).
 
 `tests/exam.test.js` exercises the HTTP API: the 60-minute clock, access-code
 rejection, key concealment, per-student shuffling, autosave and grading, section
@@ -248,9 +249,14 @@ export, the importer, and a full-marks paper built by the real shuffle logic.
 `tests/ui.test.js` loads the actual `exam.html` and runs the actual `exam.js` in
 jsdom, then clicks: booting and rendering a question, an answer reaching the server,
 true/false rendering both options, typing an essay, the progress ring updating, and
-the entry form's validation. This layer exists because a syntax check happily passes
-a page whose click handler assigns to a `const` — that only throws when a student
-actually clicks.
+the entry form validating.
+
+`tests/teacher-ui.test.js` does the same for the dashboard: a live class rendering,
+a flagged student called out, the detail drawer with inline grading, the scoreboard
+and item analysis, and the setup tab reflecting saved settings.
+
+The two UI layers exist because a syntax check happily passes a page whose click
+handler assigns to a `const` — that only throws when a student actually clicks.
 
 ## Configuration
 
