@@ -30,7 +30,10 @@ const LETTER_CHOICE = /^\s*([A-J])\s*[.)]\s*(.+)$/i;
 const BULLET_CHOICE = /^\s*[-*•]\s+(.+)$/;
 const ITEM_START = /^\s*(\d+)\s*[.)]\s+(.*)$/;
 const ANSWER_LINE = /^\s*(?:ans|answer|key)\s*:?\s*(.+)$/i;
-const POINTS_TAG = /\[\s*(\d+(?:\.\d+)?)\s*\]\s*$/;
+// Not end-anchored: the documented form is "3. Prompt [3] (multi)", where the
+// marker sits before the multiselect flag rather than at the end of the line.
+const POINTS_TAG = /\[\s*(\d+(?:\.\d+)?)\s*\]/;
+const POINTS_WORDS = /\(\s*(\d+(?:\.\d+)?)\s*(?:pts?|points?)\s*\)/i;
 
 export function parseExamText(text, fallbackTitle = 'Imported Exam') {
   const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
@@ -57,10 +60,15 @@ export function parseExamText(text, fallbackTitle = 'Imported Exam') {
     let points = 1;
     let forcedKind = null;
 
-    const pointsMatch = prompt.match(POINTS_TAG);
-    if (pointsMatch) {
-      points = parseFloat(pointsMatch[1]);
-      prompt = prompt.slice(0, pointsMatch.index).trim();
+    // Strip the marker wherever it sits rather than truncating the line, so a
+    // trailing "(multi)" or "//" after the points tag still gets read.
+    for (const tag of [POINTS_TAG, POINTS_WORDS]) {
+      const m = prompt.match(tag);
+      if (m) {
+        points = parseFloat(m[1]);
+        prompt = prompt.replace(m[0], '').trim();
+        break;
+      }
     }
     if (/\(\s*multi(?:ple)?\s*\)/i.test(prompt)) {
       forcedKind = 'multiselect';

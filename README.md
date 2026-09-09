@@ -128,6 +128,38 @@ anti-cheating control as a toggle.
 Go to **/teacher → Exam setup → Question bank**, paste your exam and press
 **Preview**, then **Import**. Plain text, JSON and CSV are all accepted.
 
+### From a Word, PDF or Excel file
+
+`tools/doc2exam.py` turns a document into the JSON the importer accepts, so an
+existing exam paper does not have to be retyped.
+
+```bash
+pip install python-docx pdfplumber openpyxl      # once
+
+python3 tools/doc2exam.py exam.docx --check      # dry run: report only
+python3 tools/doc2exam.py exam.docx > exam.json  # then paste exam.json into the dashboard
+```
+
+`.docx`, `.pdf`, `.xlsx`, `.csv`, `.txt` and `.md` all work. `--check` prints what it
+found and lists anything it could not read, without emitting JSON — run that first.
+
+It understands a normal exam layout: a part heading (`PART I. MULTIPLE CHOICE`),
+numbered items, lettered choices, and an **answer key at the end of the paper**,
+which is how most exam documents are actually written:
+
+```
+ANSWER KEY
+1. B   2. A   3. C   4. TRUE   5. FALSE
+6. Photosynthesis   7. Chloroplast
+```
+
+A key value is read as a choice letter, a true/false, or free text, whichever fits
+the item. An inline `*` always wins over the key sheet. `--default-points 2` sets the
+points for items that do not state their own.
+
+Legacy `.doc` and `.ppt` need re-saving as `.docx`/`.pdf` first — those formats are
+binary and not worth guessing at.
+
 ### Plain text
 
 ```
@@ -234,6 +266,8 @@ tests/
   exam.test.js           API end-to-end tests against a real server
   ui.test.js             drives the student pages in jsdom
   teacher-ui.test.js     drives the teacher dashboard in jsdom
+tools/
+  doc2exam.py            .docx / .pdf / .xlsx / .txt -> importable JSON
 ```
 
 ## Tests

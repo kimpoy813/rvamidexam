@@ -455,6 +455,37 @@ Ans: TRUE
   assert.equal(parsed.sections[2].questions[0].points, 10);
 });
 
+test('a points tag is read even when something follows it', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  const parsed = parseExamText(`# Part I. Multiple Choice
+1. Select every prime number. [3] (multi)
+- 2 *
+- 3 *
+- 4
+
+2. Which gas do plants use? (2 pts)
+A. Oxygen
+B. CO2 *
+
+3. Explain photosynthesis. [5] //
+`);
+  const [first, second, third] = parsed.sections[0].questions;
+
+  // Regression: the tag used to be end-anchored, so "[3] (multi)" lost both the
+  // points and the multiselect flag, and left a literal "[3]" in the prompt.
+  assert.equal(first.kind, 'multiselect');
+  assert.equal(first.points, 3);
+  assert.equal(first.prompt, 'Select every prime number.');
+  assert.deepEqual(first.answer, ['2', '3']);
+
+  assert.equal(second.points, 2);
+  assert.equal(second.prompt, 'Which gas do plants use?');
+
+  assert.equal(third.kind, 'essay');
+  assert.equal(third.points, 5);
+  assert.equal(third.prompt, 'Explain photosynthesis.');
+});
+
 test('the teacher API refuses anonymous callers', async () => {
   const { status } = await call('GET', '/api/teacher/roster');
   assert.equal(status, 401);
