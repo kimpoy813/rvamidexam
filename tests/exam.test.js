@@ -636,6 +636,71 @@ B. 8 *
   assert.equal(parsed.sections[0].questions[1].answer, '8');
 });
 
+test('a write-style True/False section stays uniform (all short)', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  // "FALSE | READING" means the answer is typed, not clicked. The whole section
+  // must become text-entry items so a pure TRUE item does not render buttons
+  // next to its neighbours' text inputs.
+  const parsed = parseExamText(`# Part VI. True or False
+Write TRUE if the statement is correct. If it is false, write the word that makes the statement incorrect.
+
+1. Reading a design means asking why an element is there.
+Ans: TRUE
+
+2. Looking is the deliberate, structured practice of asking what a design is doing.
+Ans: FALSE | READING
+
+3. Visual literacy is the ability to interpret visual material.
+Ans: TRUE
+
+4. Whitespace is wasted space and should always be filled.
+Ans: FALSE | WASTED | ACTIVE
+`);
+  const sec = parsed.sections[0];
+  assert.deepEqual(sec.questions.map((q) => q.kind), ['short', 'short', 'short', 'short']);
+  assert.equal(sec.questions[0].answer, 'TRUE');
+  assert.deepEqual(sec.questions[1].answer, ['FALSE', 'READING']);
+  assert.equal(sec.questions[2].answer, 'TRUE');
+  assert.deepEqual(sec.questions[3].answer, ['FALSE', 'WASTED', 'ACTIVE']);
+});
+
+test('a plain True/False section still renders clickable items', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  const parsed = parseExamText(`# Part II. True or False
+1. The sky is blue.
+Ans: TRUE
+
+2. The grass is purple.
+Ans: FALSE
+`);
+  const sec = parsed.sections[0];
+  assert.deepEqual(sec.questions.map((q) => q.kind), ['truefalse', 'truefalse']);
+});
+
+test('a part heading with a custom label is not eaten as the title', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  // Regression: "Part I. Word Scramble" is not in the known-section list, so it
+  // used to be swallowed as the exam title (leaving a nameless "Part 1").
+  const parsed = parseExamText(`# Part I. Word Scramble
+Unscramble each set of letters.
+
+1. NENDIOTOAT — what is shown on a screen.
+Ans: DENOTATION
+
+# Part II. "Who Am I?" Riddles
+Each riddle describes ONE design term.
+
+2. I have little feet on my strokes.
+Ans: SERIF
+`);
+  assert.equal(parsed.title, 'Imported Exam');
+  assert.deepEqual(parsed.sections.map((s) => s.title), [
+    'Part I. Word Scramble',
+    'Part II. "Who Am I?" Riddles'
+  ]);
+  assert.equal(parsed.sections[0].questions[0].kind, 'short');
+});
+
 test('a part heading is not mistaken for the exam title', async () => {
   const { parseExamText } = await import('../server/lib/importer.js');
 

@@ -56,18 +56,20 @@ The live monitor then shows everyone who has joined, updating in real time.
 
 ## What students get
 
-- **One hour**, counted by the server. Reloading, closing the tab or changing the
-  device clock does not add time. When the clock hits zero the paper is submitted
-  automatically.
-- **Four parts** (Multiple choice, True/False, Identification, Essay) with their own
-  instructions, a question map, and a progress ring.
-- **Autosave** after every response, so a dropped connection costs nothing.
+- **A per-exam time limit**, counted by the server. Reloading, closing the tab or
+  changing the device clock does not add time. When the clock hits zero the paper
+  is submitted automatically.
+- **Several parts** (Multiple choice, True/False, Identification, Essay, …) with
+  their own instructions, a question map, and a progress ring.
+- **Autosave** after every response — including the last text typed before moving
+  on or submitting — so a dropped connection costs nothing.
 - **A shuffled paper.** Question order and A/B/C/D order are randomised per student
   from a seed stored with their session, so it is stable across reloads but different
   from their neighbour's.
 - Keyboard shortcuts: `1`–`9` to pick an option, `←`/`→` to move between items.
-- **Free navigation** — students can move between parts and change an answer any
-  time before submitting. (Section locking is available as a toggle, off by default.)
+- **Free navigation** — students can jump to any question from the question map and
+  change an answer any time before submitting. No confirmation pop-ups on the way.
+  (Section locking is available as a toggle, off by default.)
 - **No score on screen.** Submitting shows a confirmation only; results stay with the
   teacher. (Also a toggle — turn on *Show results to students* to release an item
   review immediately.)
@@ -85,7 +87,7 @@ feed and in each student's timeline.
 | Answer key never leaves the server | The student API sends `hasAnswer: true`, never the key. Grading resolves the key from the database. |
 | One question at a time | `/item?i=N` returns a single question, so the whole paper cannot be pulled in one request. |
 | Per-student shuffling | Seeded per session, so screen-sharing and looking sideways do not transfer. |
-| Full-screen enforcement | Leaving full screen raises a blocking overlay and logs the event. |
+| Full-screen *(optional, off by default)* | When the teacher enables it, leaving full screen is logged. It is never forced otherwise. |
 | Tab / window detection | `visibilitychange` and `blur` are logged; the heartbeat also detects the transition server-side. |
 | Clipboard & menu blocking | Copy, cut, paste, right-click, text selection and print are blocked and logged. |
 | Shortcut blocking | F12, Ctrl+C/V/X/U/P/S, Ctrl+Shift+I/J/C/K are intercepted. |
@@ -105,10 +107,19 @@ the section locks.
 
 ## What the teacher gets
 
+**Multiple exams** — create as many exams as you need from the dashboard. Each one
+keeps its own question bank, title, duration, access code, and its own roster of
+attempts and results. Use the switcher in the top bar (or the *Your exams* list in
+**Exam setup**) to change which exam you are editing and monitoring; students are
+routed to the exam whose access code they enter.
+
 **Live monitor** — a card per student showing online status, time remaining,
 questions answered, current part, current question number, integrity flags and score
 so far, plus class KPIs and an activity feed that pushes over Server-Sent Events
-(with automatic polling fallback).
+(with automatic polling fallback). Several exams can be open at once, each with its
+own access code and timer; switch the **This exam / All exams** scope in the monitor
+to watch every exam in a single combined view — each student is tagged with the exam
+they are writing and each exam gets its own live headcount.
 
 **Per-student drawer** — click any student for their full timeline, every response
 against the answer key, and inline grading for essays and open items. From there you
@@ -126,7 +137,9 @@ anti-cheating control as a toggle.
 ## Loading your own questions
 
 Go to **/teacher → Exam setup → Question bank**, paste your exam and press
-**Preview**, then **Import**. Plain text, JSON and CSV are all accepted.
+**Preview**, then **Import**. Plain text, JSON and CSV are all accepted. The bank
+you import **replaces the currently selected exam** (see the switcher in the top
+bar), so create a separate exam first if you want to keep the current one.
 
 ### From a Word, PDF or Excel file
 
@@ -261,8 +274,13 @@ reports which items the key was applied to.
 }
 ```
 
-Importing replaces the question bank. Attempts already in progress keep the paper
-they started with, so an import never invalidates a live exam.
+The JSON may use `options` for `choices`, `correct`/`correct_answer` for `answer`,
+or an integer answer (a choice index) — all are normalised. It can also be a bare
+array of questions, or an object with `questions` at the top level, in which case a
+single part is created.
+
+Importing replaces the selected exam's question bank. Attempts already in progress
+keep the paper they started with, so an import never invalidates a live exam.
 
 ---
 
@@ -345,13 +363,33 @@ created the service by hand in the Render dashboard, change the existing
 service (Service → Settings → Environment) from **Go** to **Node**, then set
 the build/start commands above. The port is injected by Render via `PORT`.
 
+### Keeping your data (and your changed password)
+
+Everything — exams, question banks, student attempts and the **teacher
+password** — is stored in `data/exam.sqlite`. Render's default filesystem is
+**ephemeral**: every deploy or restart wipes it, which is why a changed teacher
+password can appear to "reset" back to the default. To keep the data across
+deploys you must attach a **persistent disk** (this requires a paid plan):
+
+1. In the Render dashboard, open your service → **Disks** → **Add disk**.
+2. Set the mount path to `/opt/render/project/src/data`.
+3. Add the environment variable `EXAM_DATA_DIR` = `/opt/render/project/src/data`.
+
+The `render.yaml` blueprint already declares this disk and variable (on the
+`starter` plan). If you stay on the **free** plan, remove the `disk:` block and
+`EXAM_DATA_DIR` from `render.yaml`, and be aware that all data resets on each
+deploy.
+
+Until the password is changed, the sign-in page and the startup banner show the
+default credentials; once you change it they stop advertising it.
+
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `4000` | listen port |
 | `HOST` | `0.0.0.0` | bind address |
-| `EXAM_DATA_DIR` | `./data` | where the database lives |
+| `EXAM_DATA_DIR` | `./data` | where the database lives (point this at a persistent disk on Render) |
 | `EXAM_DB` | `$EXAM_DATA_DIR/exam.sqlite` | database path |
 | `EXAM_TEACHER_USER` | `teacher` | teacher username |
-| `EXAM_TEACHER_PASSWORD` | `rvm-exam-2026` | teacher password |
+| `EXAM_TEACHER_PASSWORD` | `rvm-exam-2026` | teacher password used at first boot only |

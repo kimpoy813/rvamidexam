@@ -4,6 +4,11 @@
  * Uses the SQLite engine that ships with Node 22 (`node:sqlite`) so the app has
  * zero external runtime dependencies. Everything a teacher needs later
  * (responses, scores, integrity events) lives in one file: data/exam.sqlite.
+ *
+ * Multiple exams are supported. Each exam owns its question bank, its own
+ * settings (title, duration, access code, …) and its own roster of attempts.
+ * The teacher switches the "current" exam from the dashboard; a student is
+ * routed to whichever exam their access code belongs to.
  */
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
@@ -26,6 +31,14 @@ PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS exams (
+  id           TEXT PRIMARY KEY,
+  title        TEXT NOT NULL,
+  access_code  TEXT NOT NULL,
+  settings     TEXT NOT NULL DEFAULT '{}',
+  created_at   INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -33,6 +46,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 CREATE TABLE IF NOT EXISTS sections (
   id            TEXT PRIMARY KEY,
+  exam_id       TEXT,
   ord           INTEGER NOT NULL,
   title         TEXT NOT NULL,
   instructions  TEXT DEFAULT '',
@@ -56,6 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_questions_section ON questions(section_id, ord);
 
 CREATE TABLE IF NOT EXISTS sessions (
   token          TEXT PRIMARY KEY,
+  exam_id        TEXT,
   access_code    TEXT NOT NULL,
   student_name   TEXT NOT NULL,
   student_no     TEXT NOT NULL,
@@ -110,6 +125,24 @@ CREATE TABLE IF NOT EXISTS teacher_tokens (
 );
 `);
 
+/* -------------------------------------------------------- schema migration */
+
+// Databases created before multi-exam support lack these columns.
+const hasColumn = (table, col) =>
+  db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col);
+
+if (!hasColumn('sections', 'exam_id')) {
+  db.exec('ALTER TABLE sections ADD COLUMN exam_id TEXT');
+}
+if (!hasColumn('sessions', 'exam_id')) {
+  db.exec('ALTER TABLE sessions ADD COLUMN exam_id TEXT');
+}
+
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_sections_exam ON sections(exam_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_exam ON sessions(exam_id, status);
+`);
+
 /* ------------------------------------------------------------------ utils */
 
 export const now = () => Date.now();
@@ -143,7 +176,8 @@ const DEFAULT_SETTINGS = {
   shuffle_choices: '1',
   // Sections do not lock: students may revisit an earlier part within the hour.
   lock_sections: '0',
-  require_fullscreen: '1',
+  // Full screen is optional. The browser is never forced into it.
+  require_fullscreen: '0',
   max_violations: '8',
   auto_submit_on_violations: '0',
   // Scores stay with the teacher; students see only a confirmation.
@@ -153,24 +187,181 @@ const DEFAULT_SETTINGS = {
   proctor_notes: ''
 };
 
-const stmtGetSetting = db.prepare('SELECT value FROM settings WHERE key = ?');
-const stmtSetSetting = db.prepare(
-  'INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+const stmtGetPointer = db.prepare("SELECT value FROM settings WHERE key = 'current_exam_id'");
+const stmtSetPointer = db.prepare(
+  "INSERT INTO settings(key, value) VALUES('current_exam_id', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
 );
 
-export function getSettings() {
-  const out = { ...DEFAULT_SETTINGS };
-  for (const row of db.prepare('SELECT key, value FROM settings').all()) {
-    out[row.key] = String(row.value);
+function settingsFor(examId) {
+  const row = examId ? db.prepare('SELECT settings FROM exams WHERE id = ?').get(examId) : null;
+  const raw = row ? JSON.parse(row.settings || '{}') : {};
+  return { ...DEFAULT_SETTINGS, ...raw };
+}
+
+/* ------------------------------------------------------------ exam routing */
+
+export function getCurrentExamId() {
+  const pointer = stmtGetPointer.get();
+  if (pointer?.value) {
+    const exists = db.prepare('SELECT 1 AS ok FROM exams WHERE id = ?').get(pointer.value);
+    if (exists) return pointer.value;
   }
-  return out;
+  const first = db.prepare('SELECT id FROM exams ORDER BY created_at ASC, rowid ASC').get();
+  if (first) {
+    setCurrentExamId(first.id);
+    return first.id;
+  }
+  return null;
+}
+
+export function setCurrentExamId(id) {
+  if (!id) return;
+  stmtSetPointer.run(id);
+}
+
+export function getExam(examId) {
+  const row = db.prepare('SELECT * FROM exams WHERE id = ?').get(examId);
+  if (!row) return null;
+  return { ...row, settings: settingsFor(row.id) };
+}
+
+export function findExamByCode(code) {
+  const c = String(code || '').trim().toUpperCase();
+  if (!c) return null;
+  const row = db.prepare('SELECT * FROM exams WHERE access_code = ?').get(c);
+  return row ? { ...row, settings: settingsFor(row.id) } : null;
+}
+
+export function listExams() {
+  const currentId = getCurrentExamId();
+  return db.prepare('SELECT * FROM exams ORDER BY created_at ASC, rowid ASC').all().map((e) => {
+    const blueprint = getExamBlueprint(e.id);
+    return {
+      id: e.id,
+      title: e.title,
+      access_code: e.access_code,
+      settings: settingsFor(e.id),
+      current: e.id === currentId,
+      created_at: e.created_at,
+      counts: {
+        sections: blueprint.length,
+        questions: blueprint.reduce((n, s) => n + s.questions.length, 0),
+        points: blueprint.reduce((n, s) => n + s.questions.reduce((m, q) => m + q.points, 0), 0)
+      }
+    };
+  });
+}
+
+function codeTaken(code, exceptId) {
+  const row = db.prepare('SELECT id FROM exams WHERE access_code = ?').get(code);
+  return row && row.id !== exceptId ? row : null;
+}
+
+function uniqueAccessCode(preferred) {
+  let code = String(preferred || '').trim().toUpperCase();
+  if (code && !codeTaken(code, null)) return code;
+  do {
+    code = makeAccessCode();
+  } while (codeTaken(code, null));
+  return code;
+}
+
+export function createExam({ title = 'Untitled Exam', access_code, settings = {} } = {}) {
+  const id = uid('ex_');
+  const code = uniqueAccessCode(access_code);
+  const merged = { ...DEFAULT_SETTINGS, ...settings, access_code: code };
+  db.prepare('INSERT INTO exams(id, title, access_code, settings, created_at) VALUES(?,?,?,?,?)')
+    .run(id, title, code, JSON.stringify(merged), now());
+  setCurrentExamId(id);
+  return getExam(id);
+}
+
+export function deleteExam(id) {
+  const count = db.prepare('SELECT COUNT(*) AS c FROM exams').get().c;
+  if (count <= 1) throw new Error('You need at least one exam.');
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM questions WHERE section_id IN (SELECT id FROM sections WHERE exam_id = ?)').run(id);
+    db.prepare('DELETE FROM sections WHERE exam_id = ?').run(id);
+    db.prepare('DELETE FROM events WHERE token IN (SELECT token FROM sessions WHERE exam_id = ?)').run(id);
+    db.prepare('DELETE FROM sessions WHERE exam_id = ?').run(id);
+    db.prepare('DELETE FROM exams WHERE id = ?').run(id);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  // If the deleted exam was the current one, re-resolve to the first exam.
+  getCurrentExamId();
+}
+
+export function duplicateExam(id) {
+  const src = getExam(id);
+  if (!src) throw new Error('Exam not found.');
+  const blueprint = getExamBlueprint(id);
+  const copy = createExam({
+    title: `${src.title} (copy)`,
+    settings: { ...src.settings }
+  });
+  replaceExam({ title: `${src.title} (copy)`, sections: blueprint }, copy.id);
+  return copy;
+}
+
+/** Migrates a single-exam database, then makes sure at least one exam exists. */
+export function ensureExamExists() {
+  migrateLegacy();
+  const existing = getCurrentExamId();
+  if (existing) return existing;
+  return createExam({ title: 'Midterm Examination', access_code: makeAccessCode() }).id;
+}
+
+function migrateLegacy() {
+  const examCount = db.prepare('SELECT COUNT(*) AS c FROM exams').get().c;
+  if (examCount > 0) return;
+
+  const sectionCount = db.prepare('SELECT COUNT(*) AS c FROM sections').get().c;
+  const legacyRows = db.prepare("SELECT key, value FROM settings WHERE key != 'current_exam_id'").all();
+
+  // Fresh database: nothing to migrate.
+  if (sectionCount === 0 && legacyRows.length === 0) return;
+
+  const legacy = {};
+  for (const r of legacyRows) legacy[r.key] = r.value;
+  const title = legacy.exam_title || 'Midterm Examination';
+  const code = legacy.access_code || makeAccessCode();
+
+  const id = uid('ex_');
+  const merged = { ...DEFAULT_SETTINGS, ...legacy, access_code: code };
+  db.prepare('INSERT INTO exams(id, title, access_code, settings, created_at) VALUES(?,?,?,?,?)')
+    .run(id, title, code, JSON.stringify(merged), now());
+  db.prepare("UPDATE sections SET exam_id = ? WHERE exam_id IS NULL OR exam_id = ''").run(id);
+  db.prepare("DELETE FROM settings WHERE key != 'current_exam_id'").run();
+  setCurrentExamId(id);
+}
+
+export function getExamSettings(examId) {
+  return settingsFor(examId || getCurrentExamId());
+}
+
+export function getSettings() {
+  return getExamSettings(getCurrentExamId());
+}
+
+export function setExamSettings(examId, patch) {
+  const id = examId || getCurrentExamId();
+  if (!id) return { ...DEFAULT_SETTINGS };
+  const next = { ...settingsFor(id) };
+  for (const [k, v] of Object.entries(patch)) {
+    if (k in DEFAULT_SETTINGS) next[k] = String(v);
+  }
+  db.prepare('UPDATE exams SET settings = ? WHERE id = ?').run(JSON.stringify(next), id);
+  if (next.access_code) db.prepare('UPDATE exams SET access_code = ? WHERE id = ?').run(next.access_code, id);
+  if (next.exam_title) db.prepare('UPDATE exams SET title = ? WHERE id = ?').run(next.exam_title, id);
+  return next;
 }
 
 export function setSettings(patch) {
-  for (const [k, v] of Object.entries(patch)) {
-    if (k in DEFAULT_SETTINGS) stmtSetSetting.run(k, String(v));
-  }
-  return getSettings();
+  return setExamSettings(getCurrentExamId(), patch);
 }
 
 /* --------------------------------------------------------------- teachers */
@@ -227,16 +418,27 @@ export function revokeTeacherToken(token) {
 
 /* ------------------------------------------------------------- exam shape */
 
-export function getSections() {
-  return db.prepare('SELECT * FROM sections ORDER BY ord ASC, rowid ASC').all().map((s) => ({
+export function getSections(examId = getCurrentExamId()) {
+  const rows = examId
+    ? db.prepare('SELECT * FROM sections WHERE exam_id = ? ORDER BY ord ASC, rowid ASC').all(examId)
+    : db.prepare('SELECT * FROM sections ORDER BY ord ASC, rowid ASC').all();
+  return rows.map((s) => ({
     ...s,
     lock_after: !!s.lock_after,
     minutes: Number(s.minutes) || 0
   }));
 }
 
-export function getQuestions() {
-  return db.prepare('SELECT * FROM questions ORDER BY ord ASC, rowid ASC').all().map((q) => ({
+export function getQuestions(examId = getCurrentExamId()) {
+  const rows = examId
+    ? db
+        .prepare(
+          `SELECT q.* FROM questions q JOIN sections s ON s.id = q.section_id
+           WHERE s.exam_id = ? ORDER BY q.ord ASC, q.rowid ASC`
+        )
+        .all(examId)
+    : db.prepare('SELECT * FROM questions ORDER BY ord ASC, rowid ASC').all();
+  return rows.map((q) => ({
     ...q,
     choices: JSON.parse(q.choices || '[]'),
     answer: q.answer == null ? null : JSON.parse(q.answer),
@@ -246,27 +448,29 @@ export function getQuestions() {
 }
 
 /** Sections with their questions nested, in bank order. */
-export function getExamBlueprint() {
-  const questions = getQuestions();
-  return getSections().map((s) => ({
+export function getExamBlueprint(examId = getCurrentExamId()) {
+  const questions = getQuestions(examId);
+  return getSections(examId).map((s) => ({
     ...s,
     questions: questions.filter((q) => q.section_id === s.id)
   }));
 }
 
-export function replaceExam({ title, sections }) {
+export function replaceExam({ title, sections }, examId = getCurrentExamId()) {
+  const id = examId;
   const tx = () => {
     db.exec('BEGIN');
     try {
-      db.prepare('DELETE FROM questions').run();
-      db.prepare('DELETE FROM sections').run();
+      db.prepare('DELETE FROM questions WHERE section_id IN (SELECT id FROM sections WHERE exam_id = ?)').run(id);
+      db.prepare('DELETE FROM sections WHERE exam_id = ?').run(id);
       sections.forEach((sec, si) => {
         const sectionId = uid('sec_');
         db.prepare(
-          `INSERT INTO sections(id, ord, title, instructions, lock_after, minutes)
-           VALUES(?,?,?,?,?,?)`
+          `INSERT INTO sections(id, exam_id, ord, title, instructions, lock_after, minutes)
+           VALUES(?,?,?,?,?,?,?)`
         ).run(
           sectionId,
+          id,
           si,
           sec.title || `Part ${si + 1}`,
           sec.instructions || '',
@@ -298,13 +502,13 @@ export function replaceExam({ title, sections }) {
     }
   };
   tx();
-  if (title) setSettings({ exam_title: title });
-  return getExamBlueprint();
+  if (title) setExamSettings(id, { exam_title: title });
+  return getExamBlueprint(id);
 }
 
 /* --------------------------------------------------------------- sessions */
 
-const SESSION_COLUMNS = `token, access_code, student_name, student_no, class_section,
+const SESSION_COLUMNS = `token, exam_id, access_code, student_name, student_no, class_section,
   status, created_at, started_at, deadline, last_seen, order_seed, answers,
   section_index, max_section, cursor, reloads, ip, user_agent, submitted_at, score,
   max_score, pending_manual, violations, flagged, manual_notes, manual_scores`;
@@ -312,11 +516,12 @@ const SESSION_COLUMNS = `token, access_code, student_name, student_no, class_sec
 export function createSession(data) {
   const token = crypto.randomBytes(24).toString('base64url');
   db.prepare(
-    `INSERT INTO sessions(token, access_code, student_name, student_no, class_section,
+    `INSERT INTO sessions(token, exam_id, access_code, student_name, student_no, class_section,
        status, created_at, last_seen, order_seed, ip, user_agent)
-     VALUES(?,?,?,?,?,?,?,?,?,?,?)`
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
     token,
+    data.exam_id || null,
     data.access_code,
     data.student_name,
     data.student_no,
@@ -346,10 +551,19 @@ export function hydrateSession(row) {
   };
 }
 
-export function listSessions(accessCode) {
-  const rows = accessCode
-    ? db.prepare(`SELECT ${SESSION_COLUMNS} FROM sessions WHERE access_code = ? ORDER BY created_at ASC`).all(accessCode)
-    : db.prepare(`SELECT ${SESSION_COLUMNS} FROM sessions ORDER BY created_at ASC`).all();
+export function listSessions(filter) {
+  let rows;
+  if (filter && filter.exam_id) {
+    rows = db
+      .prepare(`SELECT ${SESSION_COLUMNS} FROM sessions WHERE exam_id = ? ORDER BY created_at ASC`)
+      .all(filter.exam_id);
+  } else if (typeof filter === 'string' && filter) {
+    rows = db
+      .prepare(`SELECT ${SESSION_COLUMNS} FROM sessions WHERE access_code = ? ORDER BY created_at ASC`)
+      .all(filter);
+  } else {
+    rows = db.prepare(`SELECT ${SESSION_COLUMNS} FROM sessions ORDER BY created_at ASC`).all();
+  }
   return rows.map(hydrateSession);
 }
 
@@ -392,7 +606,12 @@ export function eventsSince(after = 0) {
     .all(after);
 }
 
-export function deleteSessionsExceptKeep() {
+export function deleteSessionsExceptKeep(examId = null) {
+  if (examId) {
+    db.prepare('DELETE FROM events WHERE token IN (SELECT token FROM sessions WHERE exam_id = ?)').run(examId);
+    db.prepare('DELETE FROM sessions WHERE exam_id = ?').run(examId);
+    return;
+  }
   db.prepare('DELETE FROM events').run();
   db.prepare('DELETE FROM sessions').run();
 }

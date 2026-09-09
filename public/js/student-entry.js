@@ -34,10 +34,6 @@ async function loadInfo() {
     $('#rulesList').prepend(li);
   }
 
-  if (!info.requireFullscreen) {
-    $('#rulesList').children[1]?.remove();
-  }
-
   // These two rules depend on how the teacher has configured the exam.
   if (info.lockSections) {
     $('#ruleNavigate').innerHTML =

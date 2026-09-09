@@ -65,6 +65,12 @@ PART_HEADING = re.compile(
     re.I,
 )
 SIMPLE_PART = re.compile(r"^\s*(?:#{1,3}\s+)?((?:Part\s+)?[A-Za-z][A-Za-z0-9 /&,'’()\-]{3,60})\s*$")
+# "Part N. <label>" — the label may be any words (quotes, question marks and
+# custom names included), so a part is never mistaken for the exam title.
+PART_PREFIX = re.compile(
+    r"^\s*(?:#{1,3}\s*)?part\s+([ivxlcdm]+|\d+)\s*[.)\-:–—]?\s*(.+?)\s*$",
+    re.I,
+)
 ITEM = re.compile(r"^\s*(\d{1,3})\s*[.)]\s+(.*)$")
 LETTER_CHOICE = re.compile(r"^\s*([A-J])\s*[.)]\s*(.+)$", re.I)
 BULLET_CHOICE = re.compile(r"^\s*[-*•]\s+(.+)$")
@@ -211,9 +217,18 @@ def apply_key(item: dict, value: str) -> bool:
 # ------------------------------------------------------------------- parsing
 
 def looks_like_part(line: str) -> str | None:
+    # A heading that literally starts with "Part N." is unambiguously a part,
+    # whatever it is called ("Word Scramble", "Number Puzzle", …).
+    m = PART_PREFIX.match(line)
+    if m:
+        label = m.group(2).strip().strip(".:,-").strip()
+        if label:
+            return f"Part {m.group(1).upper()}. {label.title()}"
     m = PART_HEADING.match(line)
     if m:
         label = m.group(3).strip().strip(".:,-")
+        # The bare roman-numeral form needs the known-section-word check, so a
+        # title like "Laws of Motion" is never read as "Part L. …".
         if any(w in label.lower() for w in SECTION_WORDS):
             num = (m.group(1) or m.group(2) or "").upper()
             return f"Part {num}. {label.title()}"
@@ -278,8 +293,11 @@ def parse(text: str, default_points: float) -> dict:
             continue
 
         if line.startswith("#") and title == "Imported Exam":
-            title = line.lstrip("# ").strip()
-            continue
+            heading = line.lstrip("# ").strip()
+            # A "# PART I. …" heading is a part, not the exam title.
+            if not looks_like_part(line):
+                title = heading
+                continue
 
         part = looks_like_part(line)
         if part and not ITEM.match(line):
@@ -332,11 +350,33 @@ def parse(text: str, default_points: float) -> dict:
     resolved = []
     for sec in sections:
         qs = [resolve(sec, i + 1, q, warnings) for i, q in enumerate(sec["questions"])]
+        qs = _uniformize_section(qs)
         if qs:
             resolved.append({"title": sec["title"], "instructions": sec["instructions"],
                              "questions": qs})
     return {"title": title, "sections": resolved, "warnings": warnings,
             "keyApplied": sorted(key)}
+
+
+def _uniformize_section(questions: list[dict]) -> list[dict]:
+    """A "True or False" section answered by writing keeps its input uniform.
+
+    When any item's key mixes a boolean with extra accepted words (e.g.
+    "FALSE | READING"), every pure True/False item in the section becomes a
+    text-entry (short) item too, instead of a confusing mix of buttons and
+    inputs.
+    """
+    write_style = any(q.get("mixed_boolean") for q in questions)
+    out = []
+    for q in questions:
+        q.pop("mixed_boolean", None)
+        if write_style and q["kind"] == "truefalse":
+            out.append({"kind": "short", "prompt": q["prompt"], "points": q["points"],
+                        "choices": [], "shuffle": False,
+                        "answer": "TRUE" if q["answer"] == "True" else "FALSE"})
+        else:
+            out.append(q)
+    return out
 
 
 def resolve(sec: dict, n: int, q: dict, warnings: list[str]) -> dict:
@@ -358,12 +398,17 @@ def resolve(sec: dict, n: int, q: dict, warnings: list[str]) -> dict:
 
     if q["forced"] == "truefalse_key" or q["answer_line"]:
         alts = [a.strip() for a in (q["answer_line"] or "").split("|") if a.strip()]
-        if alts and all(TRUE_FALSE.match(a) for a in alts):
+        bools = [a for a in alts if TRUE_FALSE.match(a)]
+        if alts and len(bools) == len(alts):
             right = alts[0].lower() in ("true", "t", "yes", "tama")
             return {**base, "kind": "truefalse", "choices": ["True", "False"],
                     "answer": "True" if right else "False", "shuffle": False}
+        # A key like "FALSE | READING" accepts a boolean word OR the word that
+        # should have been written — the item is answered by typing, not by
+        # clicking True/False. Flag it so the whole section is made uniform.
         return {**base, "kind": "short",
-                "answer": alts[0] if len(alts) == 1 else alts, "shuffle": False}
+                "answer": alts[0] if len(alts) == 1 else alts, "shuffle": False,
+                "mixed_boolean": bool(bools)}
 
     warnings.append(f"{where}: no answer key provided — it will be graded manually.")
     return {**base, "kind": "short", "answer": None, "shuffle": False}
