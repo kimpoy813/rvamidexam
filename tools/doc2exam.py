@@ -55,9 +55,12 @@ from pathlib import Path
 
 # ------------------------------------------------------------------- patterns
 
+# A separator after the numeral is required. Without it "[ivxlcdm]+" happily
+# matches the start of ordinary words: "Mid"term, "L"aws, "Ci"rcuits, "M"y.
 PART_HEADING = re.compile(
     r"^\s*(?:#{1,3}\s*)?"
-    r"(?:part\s+)?([ivxlcdm]+|\d+)\s*[.)\-:]?\s*[:.\-–—]?\s*"
+    r"(?:part\s+([ivxlcdm]+|\d+)\s*[.)\-:–—]?\s*"
+    r"|([ivxlcdm]+|\d+)\s*[.)\-:–—]\s*)"
     r"([A-Za-z][A-Za-z /&,'’()\-]{2,60})\s*$",
     re.I,
 )
@@ -210,9 +213,9 @@ def apply_key(item: dict, value: str) -> bool:
 def looks_like_part(line: str) -> str | None:
     m = PART_HEADING.match(line)
     if m:
-        label = m.group(2).strip().strip(".:,-")
+        label = m.group(3).strip().strip(".:,-")
         if any(w in label.lower() for w in SECTION_WORDS):
-            num = m.group(1).upper()
+            num = (m.group(1) or m.group(2) or "").upper()
             return f"Part {num}. {label.title()}"
     m = SIMPLE_PART.match(line)
     if m:

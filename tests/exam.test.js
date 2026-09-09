@@ -108,7 +108,23 @@ test('the answer key is never sent to the student', async () => {
   assert.equal(item.status, 200);
   const raw = JSON.stringify(item.data);
   assert.ok(!/"answer"/.test(raw), 'the response must not contain an answer field');
-  assert.ok(!/correct/i.test(raw), 'the response must not leak the correct choice');
+  // Not a bare /correct/i grep: a legitimate choice in the sample bank is
+  // literally "Quoting a source and citing it correctly", so the word shows up
+  // as ordinary choice text whenever the shuffle puts that item first. Assert
+  // the real property instead — nothing marks which choice is right.
+  assert.ok(!/"is_?correct"|"isCorrect"|"correct"\s*:/.test(raw), 'no choice may be flagged correct');
+  for (const c of item.data.question.choices) {
+    assert.deepEqual(
+      Object.keys(c).sort(),
+      ['key', 'label', 'text'],
+      `choice ${c.label} must expose only key/label/text, got ${Object.keys(c).join(',')}`
+    );
+  }
+  assert.equal(
+    Object.keys(item.data.question).filter((k) => /answer|correct|solution|key$/i.test(k)).length,
+    0,
+    'the question object must not carry a key field'
+  );
   assert.ok(item.data.question.choices.length >= 2);
 });
 
@@ -618,6 +634,61 @@ B. 8 *
   assert.equal(parsed.sections[0].questions.length, 2);
   assert.equal(parsed.sections[0].questions[0].answer, '7');
   assert.equal(parsed.sections[0].questions[1].answer, '8');
+});
+
+test('a part heading is not mistaken for the exam title', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+
+  // Regression: the first "#" heading was always taken as the title, so a paper
+  // opening straight into a part heading lost that part's name and the exam was
+  // titled "PART I. MULTIPLE CHOICE".
+  const opensOnPart = parseExamText(`# PART I. MULTIPLE CHOICE
+Directions: Choose the letter of the best answer.
+
+1. Which of these is prime?
+A. 4
+B. 7 *
+`);
+  assert.equal(opensOnPart.title, 'Imported Exam');
+  assert.equal(opensOnPart.sections[0].title, 'PART I. MULTIPLE CHOICE');
+
+  const withTitle = parseExamText(`# GE ELEC 103 Midterm Exam
+# PART I. MULTIPLE CHOICE
+
+1. Which of these is prime?
+A. 4
+B. 7 *
+`);
+  assert.equal(withTitle.title, 'GE ELEC 103 Midterm Exam');
+  assert.equal(withTitle.sections[0].title, 'PART I. MULTIPLE CHOICE');
+
+  const titleOnly = parseExamText(`# My Exam Title
+1. Which of these is prime?
+A. 4
+B. 7 *
+`);
+  assert.equal(titleOnly.title, 'My Exam Title');
+});
+
+test('an ordinary title is never read as a roman-numeral part', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+
+  // Regression: "[ivxlcdm]+" matches the start of ordinary words, so "Midterm"
+  // parsed as part "Mid", "Laws" as part "L", "My" as part "M".
+  for (const title of [
+    'Midterm Exam in Circuits and Devices',
+    'Laws of Motion',
+    'My Exam Title',
+    'I Am a Legend'
+  ]) {
+    const parsed = parseExamText(`# ${title}
+1. Which of these is prime?
+A. 4
+B. 7 *
+`);
+    assert.equal(parsed.title, title, `"${title}" should stay the exam title`);
+    assert.equal(parsed.sections[0].title, 'Part 1');
+  }
 });
 
 test('the teacher API refuses anonymous callers', async () => {

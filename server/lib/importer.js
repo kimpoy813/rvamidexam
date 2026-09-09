@@ -42,6 +42,35 @@ const KEY_HEADING = /^\s*(answer\s*key|answer\s*sheet|key\s*to\b|answers?)\s*[:\
 const KEY_ENTRY = /(\d{1,3})\s*[.):\-]\s*/g;
 const KEY_RANGE = /^\s*(\d{1,3})\s*[-–—]\s*(\d{1,3})\s*[.):\-]\s*(.*)$/;
 const TRUE_FALSE_KEY = /^(true|false|t|f|yes|no|tama|mali)$/i;
+// "PART I. MULTIPLE CHOICE", "Part 2: True or False", "III - Identification".
+// A separator after the numeral is required, otherwise "[ivxlcdm]+" happily
+// matches the start of ordinary words ("Mid"term, "L"aws, "Ci"rcuits).
+// Mirrors PART_HEADING in tools/doc2exam.py.
+const PART_HEADING =
+  /^\s*(?:#{1,3}\s*)?(?:part\s+([ivxlcdm]+|\d+)\s*[.)\-:–—]?\s*|([ivxlcdm]+|\d+)\s*[.)\-:–—]\s*)([A-Za-z][A-Za-z /&,'’()\-]{2,60})\s*$/i;
+const SECTION_WORDS = [
+  'multiple choice', 'multiple-choice', 'true or false', 'true/false',
+  'identification', 'matching', 'essay', 'short answer', 'fill in', 'fill-in',
+  'problem solving', 'computation', 'enumeration', 'modified', 'analogy'
+];
+
+/**
+ * Recognise a part heading and return its normalised title, or null.
+ * A numeral alone is not enough — the label must name a kind of section, so an
+ * ordinary title like "Laws of Motion" is never mistaken for "Part L. aws of
+ * Motion". Mirrors looks_like_part() in tools/doc2exam.py.
+ */
+function looksLikePart(line) {
+  const m = String(line).match(PART_HEADING);
+  if (m) {
+    const label = (m[3] || '').trim().replace(/^[.:,\-]+|[.:,\-]+$/g, '');
+    if (SECTION_WORDS.some((w) => label.toLowerCase().includes(w))) {
+      const num = (m[1] || m[2] || '').toUpperCase();
+      return `Part ${num}. ${label.replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1))}`;
+    }
+  }
+  return null;
+}
 
 /**
  * Peel a trailing answer key off the paper.
@@ -185,7 +214,10 @@ export function parseExamText(text, fallbackTitle = 'Imported Exam') {
     // ---- section heading
     if (/^#{1,3}\s+/.test(line)) {
       const heading = line.replace(/^#{1,3}\s+/, '').trim();
-      if (!titleSeen) {
+      // A paper that opens straight into "# PART I. MULTIPLE CHOICE" has no
+      // title line of its own. Only a heading that is not a part heading can
+      // be the exam title, or the first part loses its name to the title.
+      if (!titleSeen && !looksLikePart(heading)) {
         title = heading;
         titleSeen = true;
         continue;
