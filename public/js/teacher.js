@@ -834,6 +834,10 @@ $('#importBank').addEventListener('click', async () => {
     toast(`Imported ${data.counts.questions} items.`, 'ok');
     paintPreview((await api('/api/teacher/exam')).blueprint, data.warnings || [], data.keyApplied);
     loadExam();
+    // An import adopts the paper's own title, so the settings form is stale until
+    // it is re-read. Left alone, the old title would sit in the field and a
+    // later "Save settings" would silently write it back over the new one.
+    await loadSettings();
     refreshResults();
   } catch (err) {
     toast(err.message, 'bad');

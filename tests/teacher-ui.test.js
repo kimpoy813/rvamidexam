@@ -248,3 +248,71 @@ test('the exam setup tab loads the current settings and question bank', async ()
     'the editor should be pre-filled with the current bank');
   assert.ok($$(win, '#bankPreview .bp-sec').length >= 4, 'the preview should list every part');
 });
+
+test('a pasted paper with an answer key previews and imports', async () => {
+  const win = await openDashboard();
+  await settle(3200);
+
+  $$(win, '.tab').find((t) => t.dataset.tab === 'setup')
+    .dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await settle(900);
+
+  // Exactly the shape a teacher gets from copying a paper and its key sheet.
+  $(win, '#bankText').value = `GE ELEC 103 - Midterm Examination
+
+PART I. MULTIPLE CHOICE
+Directions: Choose the letter of the correct answer.
+
+1. Which of the following is a chemical change?
+A. Melting of ice    B. Rusting of iron    C. Dissolving sugar
+
+2. What is the smallest unit of an element?
+A. Molecule    B. Atom    C. Compound
+
+PART II. TRUE OR FALSE
+
+3. Sound travels faster in water than in air.
+
+PART III. IDENTIFICATION
+
+4. The process by which plants make their own food.
+
+ANSWER KEY
+1. B    2. B
+3. TRUE
+4. Photosynthesis
+`;
+
+  $(win, '#previewBank').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await settle(1200);
+
+  const secs = $$(win, '#bankPreview .bp-sec');
+  assert.equal(secs.length, 3, 'all three parts should appear in the preview');
+  assert.match(secs[0].textContent, /Part I\. Multiple Choice/);
+  assert.match(secs[1].textContent, /Part II\. True Or False/);
+  assert.match(secs[2].textContent, /Part III\. Identification/);
+
+  // The banner must confirm the key sheet was actually picked up, and nothing
+  // should be flagged as unreadable.
+  assert.match($(win, '#bankWarnings').textContent, /Answer key read/);
+  assert.match($(win, '#bankWarnings').textContent, /applied to 4 item\(s\): 1, 2, 3, 4/);
+  assert.doesNotMatch($(win, '#bankWarnings').textContent, /thing\(s\) to check/);
+  assert.doesNotMatch($(win, '#bankPreview').textContent, /no key/,
+    'every item should have a resolved answer');
+
+  $(win, '#importBank').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await settle(1500);
+
+  assert.match($(win, '#bankCount').textContent, /3 parts · 4 items · 4 pts/);
+  assert.match($(win, '#sTitle').value, /GE ELEC 103 - Midterm Examination/,
+    'importing should adopt the paper title');
+
+  // The bank that was stored is the one a student will actually be served.
+  const stored = await api('/api/teacher/exam', {
+    headers: { 'X-Teacher-Token': teacherToken }
+  });
+  assert.equal(stored.blueprint.length, 3);
+  assert.equal(stored.blueprint[0].questions[0].answer, 'Rusting of iron');
+  assert.equal(stored.blueprint[1].questions[0].kind, 'truefalse');
+  assert.equal(stored.blueprint[2].questions[0].answer, 'Photosynthesis');
+});
