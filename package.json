@@ -1,0 +1,20 @@
+{
+  "name": "rvam-exam",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RVM Midterm Exam — secure online examination platform with live teacher monitoring",
+  "type": "module",
+  "main": "server/index.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
+    "seed": "node --disable-warning=ExperimentalWarning server/scripts/seed.js --force",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-force-exit \"tests/*.test.js\""
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1"
+  }
+}
