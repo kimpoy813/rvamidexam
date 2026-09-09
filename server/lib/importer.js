@@ -71,7 +71,9 @@ function looksLikePart(line) {
     const label = (m[3] || '').trim().replace(/^[.:,\-]+|[.:,\-]+$/g, '');
     if (SECTION_WORDS.some((w) => label.toLowerCase().includes(w))) {
       const num = (m[1] || m[2] || '').toUpperCase();
-      return `Part ${num}. ${label.replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1))}`;
+      // Match Python's str.title() so the dashboard and tools/doc2exam.py
+      // normalise a heading the same way: "MULTIPLE CHOICE" -> "Multiple Choice".
+      return `Part ${num}. ${label.replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase())}`;
     }
   }
   return null;
@@ -212,9 +214,34 @@ export function parseExamText(text, fallbackTitle = 'Imported Exam') {
     section.questions.push(item);
   };
 
-  for (const rawLine of lines) {
+  // A paper usually opens with its own title on a plain line, e.g.
+  // "GE ELEC 103 - Midterm Examination". Take the first non-empty line as the
+  // title unless it is a heading, an item, or a part heading.
+  let body = lines;
+  if (!titleSeen) {
+    const firstIdx = lines.findIndex((l) => l.trim());
+    if (firstIdx !== -1) {
+      const first = lines[firstIdx].trim();
+      if (!first.startsWith('#') && !ITEM_START.test(first) && !looksLikePart(first)) {
+        title = first;
+        titleSeen = true;
+        body = lines.slice(0, firstIdx).concat(lines.slice(firstIdx + 1));
+      }
+    }
+  }
+
+  for (const rawLine of body) {
     const line = rawLine.replace(/\s+$/, '');
     if (!line.trim()) continue;
+
+    // ---- bare part heading ("PART I. MULTIPLE CHOICE" with no "#" prefix)
+    if (!ITEM_START.test(line)) {
+      const part = looksLikePart(line);
+      if (part) {
+        pushSection(part, sections.length);
+        continue;
+      }
+    }
 
     // ---- section heading
     if (/^#{1,3}\s+/.test(line)) {

@@ -650,7 +650,7 @@ A. 4
 B. 7 *
 `);
   assert.equal(opensOnPart.title, 'Imported Exam');
-  assert.equal(opensOnPart.sections[0].title, 'PART I. MULTIPLE CHOICE');
+  assert.equal(opensOnPart.sections[0].title, 'Part I. Multiple Choice');
 
   const withTitle = parseExamText(`# GE ELEC 103 Midterm Exam
 # PART I. MULTIPLE CHOICE
@@ -660,7 +660,7 @@ A. 4
 B. 7 *
 `);
   assert.equal(withTitle.title, 'GE ELEC 103 Midterm Exam');
-  assert.equal(withTitle.sections[0].title, 'PART I. MULTIPLE CHOICE');
+  assert.equal(withTitle.sections[0].title, 'Part I. Multiple Choice');
 
   const titleOnly = parseExamText(`# My Exam Title
 1. Which of these is prime?
@@ -747,6 +747,72 @@ Ans: five
   assert.deepEqual(q.choices, []);
   assert.equal(q.answer, 'five');
   assert.equal(q.prompt, 'The value of x. B. is 5 and it matters.');
+});
+
+test('a paper written without "#" markers still splits into parts', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  // Regression: bare "PART I. MULTIPLE CHOICE" lines were ignored, so a whole
+  // four-part paper collapsed into one unnamed section and the title line was
+  // swallowed as instructions.
+  const parsed = parseExamText(`GE ELEC 103 - Midterm Examination
+
+PART I. MULTIPLE CHOICE
+Directions: Choose the letter of the correct answer.
+
+1. Which of the following is a chemical change?
+A. Melting of ice    B. Rusting of iron    C. Dissolving sugar
+
+PART II. TRUE OR FALSE
+Directions: Write TRUE if the statement is correct.
+
+2. Sound travels faster in water than in air.
+
+PART III. IDENTIFICATION
+
+3. The process by which plants make their own food.
+
+PART IV. ESSAY
+
+4. Explain the importance of renewable energy. //  [10]
+
+ANSWER KEY
+1. B
+2. TRUE
+3. Photosynthesis
+`);
+
+  assert.equal(parsed.title, 'GE ELEC 103 - Midterm Examination');
+  assert.deepEqual(parsed.sections.map((s) => s.title), [
+    'Part I. Multiple Choice',
+    'Part II. True Or False',
+    'Part III. Identification',
+    'Part IV. Essay'
+  ]);
+  assert.deepEqual(parsed.keyApplied, [1, 2, 3]);
+  assert.equal(parsed.warnings.length, 0, parsed.warnings.join('; '));
+
+  const kinds = parsed.sections.flatMap((s) => s.questions.map((q) => q.kind));
+  assert.deepEqual(kinds, ['mcq', 'truefalse', 'short', 'essay']);
+  assert.equal(parsed.sections[3].questions[0].points, 10);
+  assert.match(parsed.sections[0].instructions, /Choose the letter of the correct answer/);
+});
+
+test('the dashboard importer and the document converter agree on headings', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  const parsed = parseExamText(`PART I. MULTIPLE CHOICE
+1. Which of these is prime?
+A. 4
+B. 7 *
+
+PART II. TRUE OR FALSE
+2. Water boils at 100 C.
+`);
+  // tools/doc2exam.py normalises these to title case; the two must match or the
+  // same paper imports differently depending on which route is used.
+  assert.deepEqual(parsed.sections.map((s) => s.title), [
+    'Part I. Multiple Choice',
+    'Part II. True Or False'
+  ]);
 });
 
 test('the teacher API refuses anonymous callers', async () => {
