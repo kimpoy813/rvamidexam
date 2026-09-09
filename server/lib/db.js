@@ -22,13 +22,17 @@ export const DATA_DIR = process.env.EXAM_DATA_DIR || path.join(ROOT, 'data');
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const DB_PATH = process.env.EXAM_DB || path.join(DATA_DIR, 'exam.sqlite');
+export const DB_PATH = process.env.EXAM_DB || path.join(DATA_DIR, 'exam.sqlite');
 
 export const db = new DatabaseSync(DB_PATH);
 
 db.exec(`
 PRAGMA journal_mode = WAL;
-PRAGMA synchronous = NORMAL;
+-- Exam configuration and answers are more important than a small write-speed
+-- gain. FULL makes SQLite wait until a committed change is on disk before the
+-- API reports it as saved, including when the host is stopped immediately.
+PRAGMA synchronous = FULL;
+PRAGMA busy_timeout = 5000;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS exams (
@@ -143,12 +147,45 @@ CREATE INDEX IF NOT EXISTS idx_sections_exam ON sections(exam_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_exam ON sessions(exam_id, status);
 `);
 
+// A stable ID lets the dashboard distinguish a normal browser reopen from a
+// hosting provider replacing the database with a fresh ephemeral filesystem.
+// It lives in SQLite, so it follows the same persistence guarantees as exams.
+const storageIdRow = db.prepare("SELECT value FROM settings WHERE key = 'storage_id'").get();
+if (!storageIdRow) {
+  db.prepare("INSERT INTO settings(key, value) VALUES('storage_id', ?)")
+    .run(crypto.randomBytes(16).toString('hex'));
+}
+
 /* ------------------------------------------------------------------ utils */
 
 export const now = () => Date.now();
 
 export const uid = (prefix = '') =>
   prefix + crypto.randomBytes(8).toString('hex');
+
+/** Force committed WAL pages into the main database before shutdown/backup. */
+export function checkpointDatabase() {
+  try {
+    return db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+  } catch {
+    return null;
+  }
+}
+
+/** Non-sensitive storage diagnostics for the authenticated teacher dashboard. */
+export function getStorageInfo() {
+  const onRender = process.env.RENDER === 'true' || Boolean(process.env.RENDER_SERVICE_ID);
+  const declaredPersistent = process.env.EXAM_STORAGE_MODE === 'persistent';
+  const durable = !onRender || declaredPersistent;
+  return {
+    storageId: db.prepare("SELECT value FROM settings WHERE key = 'storage_id'").get()?.value || '',
+    durable,
+    mode: declaredPersistent ? 'persistent-disk' : onRender ? 'host-filesystem' : 'local-disk',
+    warning: durable
+      ? ''
+      : 'This Render service is using an ephemeral filesystem. Add a persistent disk or the setup will reset when the service restarts.'
+  };
+}
 
 /** Human friendly, hard-to-mistake access code: 3 letters + 3 digits. */
 export function makeAccessCode() {
@@ -320,7 +357,9 @@ function migrateLegacy() {
   if (examCount > 0) return;
 
   const sectionCount = db.prepare('SELECT COUNT(*) AS c FROM sections').get().c;
-  const legacyRows = db.prepare("SELECT key, value FROM settings WHERE key != 'current_exam_id'").all();
+  const legacyRows = db.prepare(
+    "SELECT key, value FROM settings WHERE key NOT IN ('current_exam_id', 'storage_id')"
+  ).all();
 
   // Fresh database: nothing to migrate.
   if (sectionCount === 0 && legacyRows.length === 0) return;
@@ -335,7 +374,7 @@ function migrateLegacy() {
   db.prepare('INSERT INTO exams(id, title, access_code, settings, created_at) VALUES(?,?,?,?,?)')
     .run(id, title, code, JSON.stringify(merged), now());
   db.prepare("UPDATE sections SET exam_id = ? WHERE exam_id IS NULL OR exam_id = ''").run(id);
-  db.prepare("DELETE FROM settings WHERE key != 'current_exam_id'").run();
+  db.prepare("DELETE FROM settings WHERE key NOT IN ('current_exam_id', 'storage_id')").run();
   setCurrentExamId(id);
 }
 
@@ -354,10 +393,23 @@ export function setExamSettings(examId, patch) {
   for (const [k, v] of Object.entries(patch)) {
     if (k in DEFAULT_SETTINGS) next[k] = String(v);
   }
-  db.prepare('UPDATE exams SET settings = ? WHERE id = ?').run(JSON.stringify(next), id);
-  if (next.access_code) db.prepare('UPDATE exams SET access_code = ? WHERE id = ?').run(next.access_code, id);
-  if (next.exam_title) db.prepare('UPDATE exams SET title = ? WHERE id = ?').run(next.exam_title, id);
-  return next;
+
+  // Keep the JSON settings, display title, and access-code index in one durable
+  // transaction. A shutdown can no longer leave only part of the setup saved.
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('UPDATE exams SET settings = ?, access_code = ?, title = ? WHERE id = ?').run(
+      JSON.stringify(next),
+      next.access_code,
+      next.exam_title,
+      id
+    );
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return settingsFor(id);
 }
 
 export function setSettings(patch) {

@@ -8,7 +8,8 @@ import {
   verifyTeacher, issueTeacherToken, teacherFromToken, revokeTeacherToken, getSession,
   listSessions, updateSession, logEvent, now, eventsFor, getExamBlueprint, replaceExam,
   deleteSessionsExceptKeep, getQuestions, getSections, ensureTeacher,
-  listExams, createExam, deleteExam, duplicateExam, findExamByCode, getExam
+  listExams, createExam, deleteExam, duplicateExam, findExamByCode, getExam,
+  getStorageInfo, checkpointDatabase
 } from '../lib/db.js';
 import { buildPaper, gradePaper, itemAnalysis, toCsv, normalizeAnswer } from '../lib/exam.js';
 import { HttpError, sendJson, sendText, readJsonBody, readTextBody } from '../lib/http.js';
@@ -373,6 +374,11 @@ export function registerTeacherRoutes(router, { requireAuth }) {
     sendJson(res, 200, getSettings());
   });
 
+  router.get('/api/teacher/storage', (req, res) => {
+    requireAuth(req);
+    sendJson(res, 200, getStorageInfo());
+  });
+
   router.post('/api/teacher/settings', async (req, res) => {
     requireAuth(req);
     const body = await readJsonBody(req);
@@ -404,6 +410,9 @@ export function registerTeacherRoutes(router, { requireAuth }) {
       patch.access_code = code;
     }
     const settings = setSettings(patch);
+    // Do not tell the teacher "saved" until SQLite has committed and
+    // checkpointed the setup to the database file.
+    checkpointDatabase();
     broadcastRoster(true);
     sendJson(res, 200, settings);
   });
@@ -414,6 +423,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
     requireAuth(req);
     const blueprint = getExamBlueprint();
     sendJson(res, 200, {
+      title: getSettings().exam_title,
       blueprint,
       text: examToText(blueprint),
       counts: {
@@ -427,7 +437,10 @@ export function registerTeacherRoutes(router, { requireAuth }) {
   router.post('/api/teacher/parse', async (req, res) => {
     requireAuth(req);
     const text = await readTextBody(req);
-    const parsed = parseAny(text);
+    // A pasted part often has no exam-title line of its own. Keep the selected
+    // exam's title in that case instead of unexpectedly renaming it to
+    // "Imported Exam".
+    const parsed = importOrBadRequest(() => parseAny(text, getSettings().exam_title));
     sendJson(res, 200, {
       ...parsed,
       counts: {
@@ -446,16 +459,24 @@ export function registerTeacherRoutes(router, { requireAuth }) {
       const body = await readJsonBody(req);
       // Normalise through the same importer as the paste path, so a JSON body
       // that is a bare array of questions (or uses "parts"/"items") works too.
-      const parsed = parseExamJson(JSON.stringify(body));
+      const parsed = importOrBadRequest(() => parseExamJson(JSON.stringify(body)));
       if (!parsed.sections.length) throw new HttpError(400, 'No questions could be read from that JSON.');
-      const blueprint = replaceExam({ title: parsed.title, sections: parsed.sections });
+      const blueprint = replaceExam({
+        title: parsed.titleExplicit ? parsed.title : getSettings().exam_title,
+        sections: parsed.sections
+      });
+      checkpointDatabase();
       broadcastRoster(true);
       return sendJson(res, 200, { ok: true, counts: countBlueprint(blueprint) });
     }
     const text = await readTextBody(req);
-    const parsed = parseAny(text);
+    const parsed = importOrBadRequest(() => parseAny(text, getSettings().exam_title));
     if (!parsed.sections.length) throw new HttpError(400, 'No questions could be read from that text.');
-    const blueprint = replaceExam(parsed);
+    const blueprint = replaceExam({
+      ...parsed,
+      title: parsed.titleExplicit ? parsed.title : getSettings().exam_title
+    });
+    checkpointDatabase();
     broadcastRoster(true);
     sendJson(res, 200, {
       ok: true,
@@ -475,6 +496,15 @@ export function registerTeacherRoutes(router, { requireAuth }) {
 }
 
 /* ------------------------------------------------------------------ helpers */
+
+function importOrBadRequest(parse) {
+  try {
+    return parse();
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    throw new HttpError(400, err?.message || 'The question bank could not be read.');
+  }
+}
 
 function requireAuthMiddleware(req) {
   // EventSource cannot set request headers, so the live stream may pass the

@@ -101,9 +101,9 @@ async function seedClass() {
   return { submitted: [a, b], writing: c };
 }
 
-async function openDashboard() {
+async function openDashboard(pathname = '/teacher') {
   const html = readFileSync(new URL('../public/teacher.html', import.meta.url), 'utf8');
-  const dom = new JSDOM(html, { url: `${BASE}/teacher`, pretendToBeVisual: true });
+  const dom = new JSDOM(html, { url: `${BASE}${pathname}`, pretendToBeVisual: true });
   const win = dom.window;
   openWindows.push(win);
 
@@ -249,6 +249,56 @@ test('the exam setup tab loads the current settings and question bank', async ()
   assert.ok($$(win, '#bankPreview .bp-sec').length >= 4, 'the preview should list every part');
 });
 
+test('exam setup auto-saves and is still present after reopening the dashboard', async () => {
+  const win = await openDashboard();
+  await settle(900);
+
+  $$(win, '.tab').find((t) => t.dataset.tab === 'setup')
+    .dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await settle(300);
+
+  const value = `Saved school ${Date.now()}`;
+  $(win, '#sSchool').value = value;
+  $(win, '#sSchool').dispatchEvent(new win.Event('input', { bubbles: true }));
+  assert.match($(win, '#setupSaveState').textContent, /Unsaved/);
+  await settle(1100);
+  assert.match($(win, '#setupSaveState').textContent, /Saved/);
+
+  let stored = await api('/api/teacher/settings', {
+    headers: { 'X-Teacher-Token': teacherToken }
+  });
+  assert.equal(stored.school, value, 'the auto-save must reach SQLite');
+
+  // Also cover closing immediately, before the normal debounce can fire. The
+  // pagehide keepalive request must flush the latest field value.
+  const lastSecondValue = `Last-second subject ${Date.now()}`;
+  $(win, '#sSubject').value = lastSecondValue;
+  $(win, '#sSubject').dispatchEvent(new win.Event('input', { bubbles: true }));
+  win.dispatchEvent(new win.Event('pagehide'));
+  await settle(450);
+  stored = await api('/api/teacher/settings', {
+    headers: { 'X-Teacher-Token': teacherToken }
+  });
+  assert.equal(stored.subject, lastSecondValue, 'page close should flush pending setup changes');
+
+  // A fresh dashboard represents closing and opening the teacher system again.
+  const reopened = await openDashboard();
+  await settle(900);
+  assert.equal($(reopened, '#sSchool').value, value);
+  assert.equal($(reopened, '#sSubject').value, lastSecondValue);
+  assert.match($(reopened, '#storageTitle').textContent, /stored|storage connected/i);
+});
+
+test('/admin opens the authenticated question editor directly', async () => {
+  const win = await openDashboard('/admin');
+  await settle(800);
+
+  assert.equal($(win, '#tab-questions').classList.contains('hidden'), false);
+  assert.equal($(win, '#tab-setup').classList.contains('hidden'), true);
+  assert.equal($$(win, '.tab').find((tab) => tab.dataset.tab === 'questions').getAttribute('aria-selected'), 'true');
+  assert.ok($(win, '#bankPreview'));
+});
+
 test('a pasted paper with an answer key previews and imports', async () => {
   const win = await openDashboard();
   await settle(3200);
@@ -315,4 +365,87 @@ ANSWER KEY
   assert.equal(stored.blueprint[0].questions[0].answer, 'Rusting of iron');
   assert.equal(stored.blueprint[1].questions[0].kind, 'truefalse');
   assert.equal(stored.blueprint[2].questions[0].answer, 'Photosynthesis');
+});
+
+test('the teacher can preview, correct, and save pasted question types', async () => {
+  const win = await openDashboard();
+  await settle(3200);
+
+  $$(win, '.tab').find((t) => t.dataset.tab === 'questions')
+    .dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await settle(500);
+  assert.equal($(win, '#tab-questions').classList.contains('hidden'), false,
+    'teachers should have a dedicated Questions tab');
+  assert.equal($(win, '#tab-setup').classList.contains('hidden'), true);
+
+  // The modified True/False directions require typed answers. Numbering with
+  // no space is intentional: this is how many document pastes arrive.
+  $(win, '#bankText').value = `# Part VI. True Or False
+Write TRUE if the statement is correct. If it is false, write the word that makes the statement incorrect.
+
+1.Reading a design means asking why an element is there and whether it actually works.
+Ans: TRUE
+2.Looking is the deliberate, structured practice of asking what a design is doing and whether it succeeds.
+Ans: FALSE | READING
+3.Whitespace is wasted space and should always be filled with more content.
+Ans: FALSE | WASTED | ACTIVE
+4.Visual literacy is the ability to interpret, evaluate, and construct meaning from visual material.
+Ans: TRUE
+5.A critique such as "it looks clean" is specific enough to earn credit in a screen teardown.
+Ans: FALSE | VAGUE | not specific | general`;
+  $(win, '#bankText').dispatchEvent(new win.Event('input', { bubbles: true }));
+  $(win, '#previewBank').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await settle(900);
+
+  const typeMenus = $$(win, '#bankPreview [data-bank-kind]');
+  assert.equal(typeMenus.length, 5, 'the full part should be shown, not a truncated summary');
+  assert.deepEqual(typeMenus.map((menu) => menu.value), Array(5).fill('short'),
+    'pure TRUE items 1 and 4 must also render as typed short answers');
+  assert.equal($$(win, '#bankPreview .bp-student-input:not(.essay)').length, 5,
+    'the teacher preview should show the student response control');
+
+  // The per-item menu is live: a teacher can override any inferred type and
+  // immediately see the corresponding student control.
+  let firstType = $(win, '[data-bank-kind="0:0"]');
+  firstType.value = 'truefalse';
+  firstType.dispatchEvent(new win.Event('change', { bubbles: true }));
+  assert.ok($(win, '[data-bank-question="0:0"] .bp-tf'), 'True/False should preview two buttons');
+  firstType = $(win, '[data-bank-kind="0:0"]');
+  firstType.value = 'short';
+  firstType.dispatchEvent(new win.Event('change', { bubbles: true }));
+  assert.ok($(win, '[data-bank-question="0:0"] .bp-student-input:not(.essay)'),
+    'changing it back to Short answer should preview a text box');
+
+  // Open the first item and change content in the structured editor. These
+  // edits must be the data saved, rather than being lost by re-parsing the raw
+  // textarea during import.
+  $(win, '[data-bank-edit-question="0:0"]')
+    .dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await settle(50);
+  const editor = $(win, '[data-bank-editor="0:0"]');
+  assert.ok(editor, 'Edit should open prompt/key/points controls');
+  editor.querySelector('[data-edit-prompt]').value = 'Reading a design means asking why each element is there. (edited)';
+  editor.querySelector('[data-edit-answer]').value = 'TRUE\nCORRECT';
+  editor.querySelector('[data-edit-points]').value = '2';
+  editor.querySelector('[data-bank-save-question]')
+    .dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await settle(80);
+
+  assert.match($(win, '#bankDraftStatus').textContent, /Unsaved/);
+  assert.match($(win, '#bankPreview').textContent, /\(edited\)/);
+
+  $(win, '#importBank').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await settle(1300);
+
+  const stored = await api('/api/teacher/exam', {
+    headers: { 'X-Teacher-Token': teacherToken }
+  });
+  assert.match(stored.title, /GE ELEC 103/, 'a part-only paste should not rename the selected exam');
+  const questions = stored.blueprint[0].questions;
+  assert.equal(questions.length, 5);
+  assert.deepEqual(questions.map((q) => q.kind), Array(5).fill('short'));
+  assert.match(questions[0].prompt, /\(edited\)$/);
+  assert.deepEqual(questions[0].answer, ['TRUE', 'CORRECT']);
+  assert.equal(questions[0].points, 2);
+  assert.match($(win, '#bankDraftStatus').textContent, /matches the saved/);
 });

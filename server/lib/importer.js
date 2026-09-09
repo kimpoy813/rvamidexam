@@ -20,8 +20,8 @@
  *   3. The exam lasts one hour.      -> "Ans:" gives the key
  *   Ans: TRUE                        -> TRUE/FALSE keys become a True/False item
  *
- *   4. Capital of the Philippines?
- *   Ans: Manila | Maynila            -> "|" lists accepted spellings
+ *   4. Capital of the Philippines? (short)
+ *   Ans: Manila | Maynila            -> "|" lists accepted spellings; short forces a text box
  *
  *   5. Explain the water cycle. //   -> "//" marks an essay (graded manually)
  */
@@ -33,8 +33,13 @@ const BULLET_CHOICE = /^\s*[-*•]\s+(.+)$/;
 // required before the marker so prose such as "the value of x. B. is 5" is not
 // chopped into choices.
 const INLINE_CHOICES = /(?:\s{2,}|\t)([A-J])\s*[.)]\s+/g;
-const ITEM_START = /^\s*(\d+)\s*[.)]\s+(.*)$/;
-const ANSWER_LINE = /^\s*(?:ans|answer|key)\s*:?\s*(.+)$/i;
+// Accept both "1. Question" and the very common copy/paste form
+// "1.Question" (Google Docs and PDFs often remove the space after numbering).
+const ITEM_START = /^\s*(\d+)\s*[.)]\s*(.+)$/;
+// Markdown produced by chat tools commonly bolds the label: "**Ans:** TRUE".
+// Treat that exactly like an ordinary answer line instead of appending it to
+// the question prompt.
+const ANSWER_LINE = /^\s*(?:\*{1,2}|_{1,2})?(?:ans(?:wer)?|key)\b\s*:?\s*(?:\*{1,2}|_{1,2})?\s*(.+)$/i;
 // Not end-anchored: the documented form is "3. Prompt [3] (multi)", where the
 // marker sits before the multiselect flag rather than at the end of the line.
 const POINTS_TAG = /\[\s*(\d+(?:\.\d+)?)\s*\]/;
@@ -65,6 +70,13 @@ const SECTION_WORDS = [
 /** Python str.title() equivalent, so headings normalise the same way. */
 function titleCaseWords(s) {
   return s.replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase());
+}
+
+/** Remove Markdown emphasis around one answer token copied from chat. */
+function cleanAnswerValue(value) {
+  const text = String(value ?? '').trim();
+  const emphasized = text.match(/^(\*\*|__|\*|_)([\s\S]*?)\1$/);
+  return (emphasized ? emphasized[2] : text).trim();
 }
 
 /**
@@ -142,7 +154,7 @@ function splitKeyBlock(lines) {
  * paste path and the document converter agree on how a key is read.
  */
 function applyKey(item, value) {
-  const v = String(value).trim();
+  const v = cleanAnswerValue(value);
   if (!v) return false;
 
   if (item.choices.length) {
@@ -212,6 +224,13 @@ export function parseExamText(text, fallbackTitle = 'Imported Exam') {
     if (/\(\s*multi(?:ple)?\s*\)/i.test(prompt)) {
       forcedKind = 'multiselect';
       prompt = prompt.replace(/\(\s*multi(?:ple)?\s*\)/i, '').trim();
+    }
+    // An explicit short marker is useful when a short answer happens to be the
+    // word TRUE or FALSE. Without it, re-pasting an exported bank would turn
+    // that text box back into True/False buttons.
+    if (/\(\s*short(?:\s+answer)?\s*\)/i.test(prompt)) {
+      forcedKind = 'short';
+      prompt = prompt.replace(/\(\s*short(?:\s+answer)?\s*\)/i, '').trim();
     }
     if (/(^|\s)\/\/\s*$/.test(prompt)) {
       forcedKind = 'essay';
@@ -285,6 +304,8 @@ export function parseExamText(text, fallbackTitle = 'Imported Exam') {
     // ---- answer key line
     const answerMatch = line.match(ANSWER_LINE);
     if (answerMatch && item) {
+      // Individual alternatives are de-emphasised later, after splitting on
+      // "|", so "**FALSE** | **READING**" is handled correctly too.
       item.answerLine = answerMatch[1].trim();
       continue;
     }
@@ -360,7 +381,10 @@ export function parseExamText(text, fallbackTitle = 'Imported Exam') {
     .map((sec) => ({
       title: sec.title,
       instructions: sec.instructions.trim(),
-      questions: uniformizeSection(sec.questions.map((q, i) => resolveQuestion(q, sec, i, warnings)))
+      questions: uniformizeSection(
+        sec.questions.map((q, i) => resolveQuestion(q, sec, i, warnings)),
+        sec
+      )
     }))
     .filter((sec) => sec.questions.length);
 
@@ -368,7 +392,7 @@ export function parseExamText(text, fallbackTitle = 'Imported Exam') {
     warnings.push('No questions were found. Check that each item starts with a number like "1."');
   }
 
-  return { title, sections: resolved, warnings, keyApplied };
+  return { title, titleExplicit: titleSeen, sections: resolved, warnings, keyApplied };
 }
 
 /**
@@ -378,8 +402,18 @@ export function parseExamText(text, fallbackTitle = 'Imported Exam') {
  * item in the same section into a text-entry item too, so the whole section is
  * typed rather than a confusing mix of buttons and inputs.
  */
-function uniformizeSection(questions) {
-  const writeStyle = questions.some((q) => q.mixedBoolean);
+function uniformizeSection(questions, section = {}) {
+  // A modified True/False direction asks the student to type a correction for
+  // false statements. That is a text-entry exercise even when an individual
+  // key is simply TRUE. Infer the interaction from the directions as well as
+  // from mixed keys such as "FALSE | READING", so every item in the part uses
+  // one consistent short-answer field.
+  const context = `${section.title || ''} ${section.instructions || ''}`.replace(/\s+/g, ' ');
+  const asksForCorrection =
+    /\bmodified\s+(?:true\s*(?:or|\/)\s*false|truefalse)\b/i.test(context) ||
+    /\bif\s+(?:it|the\s+statement|a\s+statement|statement)\s+is\s+(?:incorrect|false)\b.{0,180}\b(?:write|supply|replace|identify|give|correct)\b/i.test(context) ||
+    /\b(?:write|supply|identify|give)\s+(?:the\s+)?word\b.{0,140}\b(?:incorrect|wrong|correct)\b/i.test(context);
+  const writeStyle = asksForCorrection || questions.some((q) => q.mixedBoolean);
   return questions.map((q) => {
     delete q.mixedBoolean;
     if (writeStyle && q.kind === 'truefalse') {
@@ -431,9 +465,19 @@ function resolveQuestion(q, sec, index, warnings) {
 
   // No choices: use the answer line (if any).
   if (q.answerLine) {
-    const alternatives = q.answerLine.split('|').map((s) => s.trim()).filter(Boolean);
+    const alternatives = q.answerLine.split('|').map(cleanAnswerValue).filter(Boolean);
     const booleanCount = alternatives.filter((a) => TRUE_FALSE_KEY.test(a)).length;
     const allBoolean = alternatives.length > 0 && booleanCount === alternatives.length;
+    if (q.forcedKind === 'short') {
+      return {
+        kind: 'short',
+        prompt: q.prompt,
+        points: q.points,
+        choices: [],
+        answer: alternatives.length > 1 ? alternatives : alternatives[0],
+        shuffle: false
+      };
+    }
     if (allBoolean) {
       const right = /^(true|t|yes|tama)$/i.test(alternatives[0]);
       return {
@@ -468,29 +512,71 @@ function resolveQuestion(q, sec, index, warnings) {
 
 export function parseExamJson(text) {
   const data = JSON.parse(String(text).trim());
+  if (!data || typeof data !== 'object') {
+    throw new Error('JSON must be an object or an array of questions.');
+  }
 
-  const normalizeQuestion = (q) => {
-    const choices = q.choices || q.options || [];
+  const normalizeQuestion = (q = {}) => {
+    const sourceChoices = q.choices || q.options || [];
+    const choices = Array.isArray(sourceChoices)
+      ? sourceChoices
+          .map((choice) => {
+            if (choice && typeof choice === 'object') {
+              return choice.text ?? choice.label ?? choice.value ?? '';
+            }
+            return choice;
+          })
+          .filter((choice) => choice !== null && choice !== undefined && String(choice).trim())
+          .map(String)
+      : [];
     let answer = q.answer ?? q.correct ?? q.correct_answer ?? q.key ?? null;
 
     // An integer answer is a choice index; resolve it to the option's text.
     const asIndex = (a) => {
       if (!choices.length) return a;
       if (Array.isArray(a)) {
-        return a.map((v) => (Number.isInteger(v) ? choices[v] : v)).filter(Boolean);
+        return a
+          .map((v) => (Number.isInteger(v) ? choices[v] : v))
+          .filter((v) => v !== null && v !== undefined && String(v).trim());
       }
       if (Number.isInteger(a)) return choices[a] ?? a;
       return a;
     };
     answer = asIndex(answer);
 
+    const aliases = {
+      multiplechoice: 'mcq', choice: 'mcq', mcq: 'mcq',
+      multiselect: 'multiselect', multipleanswer: 'multiselect', checkbox: 'multiselect',
+      truefalse: 'truefalse', boolean: 'truefalse', tf: 'truefalse',
+      short: 'short', shortanswer: 'short', identification: 'short', text: 'short',
+      essay: 'essay', longanswer: 'essay'
+    };
+    const rawKind = String(q.kind || '').toLowerCase().replace(/[^a-z]/g, '');
+    const kind = aliases[rawKind] || (choices.length ? 'mcq' : 'short');
+    const points0 = Number(q.points ?? q.score ?? q.marks ?? 1);
+
+    if (kind === 'truefalse') {
+      const raw = Array.isArray(answer) ? answer[0] : answer;
+      answer = raw === null || raw === undefined || raw === ''
+        ? null
+        : /^(true|t|yes|1|tama)$/i.test(String(raw).trim()) ? 'True' : 'False';
+    } else if (kind === 'multiselect' && answer !== null && answer !== undefined) {
+      answer = Array.isArray(answer) ? answer : [answer];
+    } else if (kind === 'mcq' && Array.isArray(answer)) {
+      answer = answer[0] ?? null;
+    } else if (kind === 'essay') {
+      answer = null;
+    }
+
     return {
-      kind: q.kind || (choices.length ? 'mcq' : 'short'),
-      prompt: q.prompt || q.question || q.text || q.stem || '',
-      choices,
+      kind,
+      prompt: String(q.prompt || q.question || q.text || q.stem || ''),
+      choices: kind === 'truefalse' ? ['True', 'False']
+        : ['short', 'essay'].includes(kind) ? [] : choices,
       answer,
-      points: Number(q.points ?? q.score ?? q.marks ?? 1),
-      shuffle: q.shuffle !== false
+      points: Number.isFinite(points0) && points0 > 0 ? points0 : 1,
+      shuffle: ['mcq', 'multiselect'].includes(kind) && q.shuffle !== false,
+      tags: String(q.tags || '')
     };
   };
 
@@ -498,10 +584,12 @@ export function parseExamJson(text) {
     title: sec.title || sec.name || `Part ${i + 1}`,
     instructions: sec.instructions || sec.description || '',
     lock_after: sec.lock_after !== false,
+    minutes: Number(sec.minutes) || 0,
     questions: (sec.questions || sec.items || []).map(normalizeQuestion)
   });
 
   let title = 'Imported Exam';
+  let titleExplicit = false;
   let sections;
 
   if (Array.isArray(data)) {
@@ -515,6 +603,7 @@ export function parseExamJson(text) {
       sections = data.map(normalizeSection);
     }
   } else {
+    titleExplicit = Boolean(data.title);
     title = data.title || 'Imported Exam';
     if (Array.isArray(data.questions)) {
       // Questions at the top level, without any sections wrapper.
@@ -530,7 +619,7 @@ export function parseExamJson(text) {
 
   if (!sections.length) throw new Error('JSON must contain a "sections" array (or a list of questions).');
 
-  return { title, sections, warnings: [] };
+  return { title, titleExplicit, sections, warnings: [] };
 }
 
 /* ---------------------------------------------------------------------- CSV */
@@ -541,7 +630,7 @@ export function parseExamJson(text) {
  */
 export function parseExamCsv(text) {
   const rows = parseCsvRows(text);
-  if (!rows.length) return { title: 'Imported Exam', sections: [], warnings: ['Empty CSV'] };
+  if (!rows.length) return { title: 'Imported Exam', titleExplicit: false, sections: [], warnings: ['Empty CSV'] };
 
   const header = rows[0].map((c) => c.trim().toLowerCase());
   const hasHeader = header.includes('prompt') || header.includes('question');
@@ -569,6 +658,7 @@ export function parseExamCsv(text) {
 
   return {
     title: 'Imported Exam',
+    titleExplicit: false,
     sections: [...bySection.entries()].map(([title, questions], i) => ({
       title: title || `Part ${i + 1}`,
       instructions: '',
@@ -607,7 +697,7 @@ function parseCsvRows(text) {
 
 /* ---------------------------------------------------------------- dispatch */
 
-export function parseAny(text) {
+export function parseAny(text, fallbackTitle = 'Imported Exam') {
   const trimmed = String(text || '').trim();
   if (!trimmed) throw new Error('Nothing to import.');
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) return parseExamJson(trimmed);
@@ -615,7 +705,7 @@ export function parseAny(text) {
   if ((firstLine.match(/,/g) || []).length >= 4 && !/^\s*\d+\s*[.)]/.test(trimmed.split('\n').find((l) => l.trim()) || '')) {
     return parseExamCsv(trimmed);
   }
-  return parseExamText(trimmed);
+  return parseExamText(trimmed, fallbackTitle);
 }
 
 export function examToText(blueprint) {
@@ -628,6 +718,23 @@ export function examToText(blueprint) {
       const suffix = q.points !== 1 ? `  [${q.points}]` : '';
       if (q.kind === 'essay') {
         out.push(`${qi + 1}. ${q.prompt} //${suffix}`);
+        out.push('');
+        return;
+      }
+      // Preserve the interaction type during an edit/export/re-import cycle.
+      // In particular, a short answer whose key is TRUE must stay a text box,
+      // while a real True/False item should not be serialized as a generic MCQ.
+      if (q.kind === 'truefalse') {
+        out.push(`${qi + 1}. ${q.prompt}${suffix}`);
+        if (q.answer != null) out.push(`Ans: ${q.answer}`);
+        out.push('');
+        return;
+      }
+      if (q.kind === 'short') {
+        out.push(`${qi + 1}. ${q.prompt} (short)${suffix}`);
+        if (q.answer != null) {
+          out.push(`Ans: ${Array.isArray(q.answer) ? q.answer.join(' | ') : q.answer}`);
+        }
         out.push('');
         return;
       }

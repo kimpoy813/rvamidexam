@@ -664,6 +664,61 @@ Ans: FALSE | WASTED | ACTIVE
   assert.deepEqual(sec.questions[3].answer, ['FALSE', 'WASTED', 'ACTIVE']);
 });
 
+test('modified True/False directions force short answers for no-space pasted items', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  // This mirrors text copied from Google Docs/AI chat: no space after the item
+  // number and a Markdown-bold answer label. Even the pure TRUE keys must use a
+  // text box because false statements ask for a correcting word.
+  const parsed = parseExamText(`# Part VI. True Or False
+Write TRUE if the statement is correct. If it is false, write the word that makes the statement incorrect.
+
+1.Reading a design means asking why an element is there and whether it actually works.
+**Ans:** **TRUE**
+
+2.Looking is the deliberate, structured practice of asking what a design is doing and whether it succeeds.
+**Answer:** **FALSE** | **READING**
+
+3.Whitespace is wasted space and should always be filled with more content.
+Ans: FALSE | WASTED | ACTIVE
+
+4.Visual literacy is the ability to interpret, evaluate, and construct meaning from visual material.
+Ans: TRUE
+
+5.A critique such as "it looks clean" is specific enough to earn credit in a screen teardown.
+Ans: FALSE | VAGUE | not specific | general`, 'Existing Exam');
+
+  const sec = parsed.sections[0];
+  assert.equal(parsed.title, 'Existing Exam', 'a part-only paste should retain the supplied exam title');
+  assert.equal(sec.questions.length, 5);
+  assert.deepEqual(sec.questions.map((q) => q.kind), ['short', 'short', 'short', 'short', 'short']);
+  assert.equal(sec.questions[0].answer, 'TRUE');
+  assert.equal(sec.questions[3].answer, 'TRUE');
+  assert.doesNotMatch(sec.questions[0].prompt, /\bAns\b/i, 'the Markdown answer line must not join the prompt');
+
+  const pureKeys = parseExamText(`# Part I. Modified True or False
+Write TRUE if correct. If the statement is false, write the incorrect word.
+1.The first statement is correct.
+Ans: TRUE
+2.The second statement is incorrect.
+Ans: FALSE`);
+  assert.deepEqual(pureKeys.sections[0].questions.map((q) => q.kind), ['short', 'short'],
+    'the directions alone should select text boxes even without a mixed answer key');
+});
+
+test('question-bank text round-trips short TRUE answers without changing their type', async () => {
+  const { parseExamText, examToText } = await import('../server/lib/importer.js');
+  const blueprint = [{
+    title: 'Part I. Review', instructions: '', questions: [
+      { kind: 'short', prompt: 'Type the required word.', choices: [], answer: 'TRUE', points: 1 },
+      { kind: 'truefalse', prompt: 'Choose using buttons.', choices: ['True', 'False'], answer: 'False', points: 1 }
+    ]
+  }];
+  const text = examToText(blueprint);
+  assert.match(text, /\(short\)/);
+  const parsed = parseExamText(text);
+  assert.deepEqual(parsed.sections[0].questions.map((q) => q.kind), ['short', 'truefalse']);
+});
+
 test('a plain True/False section still renders clickable items', async () => {
   const { parseExamText } = await import('../server/lib/importer.js');
   const parsed = parseExamText(`# Part II. True or False
@@ -878,6 +933,17 @@ PART II. TRUE OR FALSE
     'Part I. Multiple Choice',
     'Part II. True Or False'
   ]);
+});
+
+test('a malformed question-bank paste returns a useful client error', async () => {
+  const res = await fetch(BASE + '/api/teacher/parse', {
+    method: 'POST',
+    headers: { 'X-Teacher-Token': teacher, 'Content-Type': 'text/plain' },
+    body: '{ definitely not valid JSON'
+  });
+  const data = await res.json();
+  assert.equal(res.status, 400);
+  assert.match(data.error, /JSON|Unexpected/i);
 });
 
 test('the teacher API refuses anonymous callers', async () => {
