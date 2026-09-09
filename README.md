@@ -327,6 +327,24 @@ and item analysis, and the setup tab reflecting saved settings.
 The two UI layers exist because a syntax check happily passes a page whose click
 handler assigns to a `const` — that only throws when a student actually clicks.
 
+## Deploying on Render
+
+This is a **Node.js** app, not a Go app. If your build log says *"Using Go
+version …"* / *"Running build command 'go build …'"* and then fails with
+*`go: go.mod file not found`*, the service was set up with the wrong runtime.
+Node is the runtime this project needs:
+
+- **Build command:** `npm install`
+- **Start command:** `npm start`
+- **Node version:** the `engines.node` (`>=22.5.0`) in `package.json`, or set
+  `NODE_VERSION` (e.g. `22`).
+
+The included `render.yaml` declares the service as a Node web service, so
+deploying from that blueprint uses the correct settings. If you instead
+created the service by hand in the Render dashboard, change the existing
+service (Service → Settings → Environment) from **Go** to **Node**, then set
+the build/start commands above. The port is injected by Render via `PORT`.
+
 ## Configuration
 
 | Variable | Default | Purpose |
