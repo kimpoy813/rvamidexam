@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teacher Dashboard — Midterm Examination</title>
+<link rel="stylesheet" href="/css/app.css">
+<link rel="stylesheet" href="/css/teacher.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%234f46e5'/><text x='50' y='68' font-size='52' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'>T</text></svg>">
+</head>
+<body>
+
+<!-- --------------------------------------------------------------- login -->
+<div class="login-wrap hidden" id="loginView">
+  <div class="card login-card">
+    <div class="card-pad">
+      <div class="login-mark">T</div>
+      <h1 style="font-size:22px">Teacher sign in</h1>
+      <p class="muted small" style="margin-top:6px">
+        Monitor your class live, review responses and release scores.
+      </p>
+      <form id="loginForm" style="margin-top:22px">
+        <div class="field">
+          <label for="lUser">Username</label>
+          <input id="lUser" type="text" autocomplete="username" required value="teacher">
+        </div>
+        <div class="field">
+          <label for="lPass">Password</label>
+          <input id="lPass" type="password" autocomplete="current-password" required>
+        </div>
+        <button class="btn btn-primary btn-lg btn-block" type="submit" style="margin-top:18px">
+          Sign in
+        </button>
+      </form>
+      <p class="tiny muted center" style="margin-top:16px">
+        Default: <span class="mono">teacher</span> / <span class="mono">rvm-exam-2026</span><br>
+        Change it right after your first sign in.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- ----------------------------------------------------------- dashboard -->
+<div class="hidden" id="appView">
+
+  <header class="appbar">
+    <div class="appbar-in">
+      <div class="brand">
+        <div class="brand-mark">EX</div>
+        <div>
+          <span class="brand-text" id="dTitle">Midterm Examination</span>
+          <span class="brand-sub" id="dSub">Teacher dashboard</span>
+        </div>
+      </div>
+
+      <div class="code-chip" id="codeChip" title="Give this code to your students">
+        <span id="codeText">———</span>
+        <button id="codeCopy" title="Copy access code" type="button">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+      </div>
+
+      <span class="pill" id="examOpenPill">—</span>
+
+      <div class="spacer"></div>
+
+      <span class="conn" id="conn"><i></i><span id="connText">Connecting…</span></span>
+
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" data-tab="live" aria-selected="true">Live monitor</button>
+        <button class="tab" role="tab" data-tab="results" aria-selected="false">Results <span class="count hidden" id="tabManual">0</span></button>
+        <button class="tab" role="tab" data-tab="setup" aria-selected="false">Exam setup</button>
+      </div>
+
+      <button class="btn btn-ghost btn-sm" id="logoutBtn">Sign out</button>
+    </div>
+  </header>
+
+  <main class="dash">
+
+    <!-- ========================================================= LIVE -->
+    <section id="tab-live">
+      <div class="kpis" id="kpis"></div>
+
+      <div class="live-grid panel" style="margin-top:18px">
+        <div class="card" style="overflow:hidden">
+          <div class="panel-head">
+            <h2>Students</h2>
+            <span class="pill pill-idle" id="rosterCount">0 joined</span>
+            <div class="spacer"></div>
+            <input type="text" id="rosterSearch" placeholder="Search name or number…"
+                   style="width:210px;padding:7px 11px;font-size:13.5px">
+            <select id="rosterFilter" style="width:auto;padding:7px 11px;font-size:13.5px">
+              <option value="all">Everyone</option>
+              <option value="online">Online now</option>
+              <option value="active">In progress</option>
+              <option value="submitted">Submitted</option>
+              <option value="flagged">Flagged</option>
+              <option value="manual">Needs grading</option>
+            </select>
+          </div>
+          <div style="padding:14px">
+            <div class="roster" id="roster"></div>
+          </div>
+        </div>
+
+        <div class="card" style="overflow:hidden">
+          <div class="panel-head">
+            <h2>Live activity</h2>
+            <div class="spacer"></div>
+            <button class="btn btn-ghost btn-sm" id="clearFeed">Clear</button>
+          </div>
+          <div class="feed" id="feed">
+            <div class="feed-empty">Integrity events and submissions will appear here in real time.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====================================================== RESULTS -->
+    <section id="tab-results" class="hidden">
+      <div class="kpis" id="resultKpis"></div>
+
+      <div class="setup-grid panel" style="margin-top:18px">
+        <div class="card" style="overflow:hidden">
+          <div class="panel-head"><h2>Score distribution</h2></div>
+          <div style="padding:20px 18px"><div class="dist" id="dist"></div></div>
+        </div>
+        <div class="card" style="overflow:hidden">
+          <div class="panel-head">
+            <h2>Hardest items</h2>
+            <div class="spacer"></div>
+            <span class="tiny muted">lowest % correct</span>
+          </div>
+          <div style="padding:14px 16px" id="hardItems"></div>
+        </div>
+      </div>
+
+      <div class="card panel" style="overflow:hidden;margin-top:18px">
+        <div class="panel-head">
+          <h2>Scoreboard</h2>
+          <div class="spacer"></div>
+          <button class="btn btn-ghost btn-sm" id="refreshResults">↻ Refresh</button>
+          <button class="btn btn-primary btn-sm" id="exportCsv">Export CSV</button>
+        </div>
+        <div class="table-wrap" style="border:none;border-radius:0">
+          <table>
+            <thead>
+              <tr>
+                <th>Student</th><th>Class</th><th>Status</th><th>Score</th>
+                <th>%</th><th>Time used</th><th>Flags</th><th>Submitted</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="scoreBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card panel" style="overflow:hidden;margin-top:18px">
+        <div class="panel-head">
+          <h2>Item analysis</h2>
+          <div class="spacer"></div>
+          <span class="tiny muted">how the class performed on each question</span>
+        </div>
+        <div class="table-wrap" style="border:none;border-radius:0">
+          <table>
+            <thead>
+              <tr><th style="width:44px">#</th><th>Question</th><th>Type</th>
+                  <th>Pts</th><th>Correct</th><th>Answered</th><th style="width:150px">Difficulty</th></tr>
+            </thead>
+            <tbody id="itemBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================== SETUP -->
+    <section id="tab-setup" class="hidden">
+      <div class="setup-grid">
+
+        <div class="card" style="overflow:hidden">
+          <div class="panel-head"><h2>Exam details</h2></div>
+          <div class="card-pad">
+            <div class="field">
+              <label for="sTitle">Exam title</label>
+              <input id="sTitle" type="text">
+            </div>
+            <div class="opt-grid">
+              <div class="field">
+                <label for="sSchool">School</label>
+                <input id="sSchool" type="text">
+              </div>
+              <div class="field">
+                <label for="sSubject">Subject</label>
+                <input id="sSubject" type="text">
+              </div>
+              <div class="field">
+                <label for="sTerm">Term / grading period</label>
+                <input id="sTerm" type="text" placeholder="e.g. First Semester, SY 2026-2027">
+              </div>
+              <div class="field">
+                <label for="sDuration">Time limit (minutes)</label>
+                <input id="sDuration" type="number" min="1" max="600">
+                <div class="hint">The clock is enforced by the server, not the browser.</div>
+              </div>
+            </div>
+            <div class="field">
+              <label for="sInstructions">Instructions shown to students</label>
+              <textarea id="sInstructions" rows="3"></textarea>
+            </div>
+            <div class="field">
+              <label for="sNotes">Note shown on the entry screen</label>
+              <input id="sNotes" type="text" placeholder="e.g. Calculators are not permitted.">
+            </div>
+
+            <div class="row" style="margin-top:16px;gap:12px;flex-wrap:wrap">
+              <div class="field grow" style="margin:0">
+                <label for="sMaxV">Integrity flags before a student is flagged</label>
+                <input id="sMaxV" type="number" min="0" max="999">
+              </div>
+              <label class="switch" style="margin-top:26px">
+                <input type="checkbox" id="sAutoSubmit"><span class="track"></span>
+                <span>Auto-submit at the limit</span>
+              </label>
+            </div>
+
+            <button class="btn btn-primary btn-block" id="saveSettings" style="margin-top:18px">
+              Save exam details
+            </button>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="card" style="overflow:hidden">
+            <div class="panel-head"><h2>Access &amp; security</h2></div>
+            <div class="card-pad stack">
+              <div class="row-between">
+                <div>
+                  <div style="font-weight:650;font-size:14px">Exam is open to students</div>
+                  <div class="tiny muted">Turn off to stop new candidates from joining.</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="sOpen"><span class="track"></span><span></span></label>
+              </div>
+
+              <div class="row-between" style="border-top:1px solid var(--line-2);padding-top:14px">
+                <div>
+                  <div style="font-weight:650;font-size:14px">Access code</div>
+                  <div class="tiny muted">Students need this to enter.</div>
+                </div>
+                <button class="btn btn-ghost btn-sm" id="newCode">Generate new code</button>
+              </div>
+
+              <div class="row-between" style="border-top:1px solid var(--line-2);padding-top:14px">
+                <div>
+                  <div style="font-weight:650;font-size:14px">Show results to students</div>
+                  <div class="tiny muted">Otherwise they only see a confirmation.</div>
+                </div>
+                <label class="switch"><input type="checkbox" id="sShow"><span class="track"></span><span></span></label>
+              </div>
+
+              <div class="row-between" style="border-top:1px solid var(--line-2);padding-top:14px">
+                <div>
+                  <div style="font-weight:650;font-size:14px">Teacher password</div>
+                  <div class="tiny muted">Protects this dashboard.</div>
+                </div>
+                <button class="btn btn-ghost btn-sm" id="changePass">Change</button>
+              </div>
+
+              <div class="row-between" style="border-top:1px solid var(--line-2);padding-top:14px">
+                <div>
+                  <div style="font-weight:650;font-size:14px;color:var(--bad)">Clear all attempts</div>
+                  <div class="tiny muted">Deletes every student response and score.</div>
+                </div>
+                <button class="btn btn-danger btn-sm" id="resetAttempts">Clear</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="overflow:hidden">
+            <div class="panel-head"><h2>Anti-cheating controls</h2></div>
+            <div class="card-pad">
+              <div class="opt-grid">
+                <label class="opt"><label class="switch"><input type="checkbox" id="sShuffleQ"><span class="track"></span></label>
+                  <span><span class="txt">Shuffle questions</span><span class="sub">Every student gets a different order.</span></span></label>
+                <label class="opt"><label class="switch"><input type="checkbox" id="sShuffleC"><span class="track"></span></label>
+                  <span><span class="txt">Shuffle choices</span><span class="sub">A/B/C/D differ per student.</span></span></label>
+                <label class="opt"><label class="switch"><input type="checkbox" id="sLock"><span class="track"></span></label>
+                  <span><span class="txt">Lock finished sections</span><span class="sub">No going back to an earlier part.</span></span></label>
+                <label class="opt"><label class="switch"><input type="checkbox" id="sFs"><span class="track"></span></label>
+                  <span><span class="txt">Require full screen</span><span class="sub">Leaving it is logged.</span></span></label>
+                <label class="opt"><label class="switch"><input type="checkbox" id="sResume"><span class="track"></span></label>
+                  <span><span class="txt">Allow resume after refresh</span><span class="sub">Keep the timer running.</span></span></label>
+              </div>
+              <button class="btn btn-primary btn-block" id="saveSecurity" style="margin-top:16px">Save controls</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- question bank -->
+      <div class="card panel" style="overflow:hidden;margin-top:18px">
+        <div class="panel-head">
+          <h2>Question bank</h2>
+          <span class="pill pill-idle" id="bankCount">—</span>
+          <div class="spacer"></div>
+          <button class="btn btn-ghost btn-sm" id="loadSampleText">Show format</button>
+          <button class="btn btn-ghost btn-sm" id="loadCurrent">Load current bank</button>
+        </div>
+        <div class="card-pad">
+          <div class="help-block" id="formatHelp" style="display:none">
+            <b>How to write your questions</b>
+            <div class="tiny muted" style="margin-top:4px">
+              Paste your whole exam below. Each <span class="mono">#</span> line starts a new part,
+              numbered lines are items, <span class="mono">*</span> marks the correct choice,
+              <span class="mono">[n]</span> sets the points.
+            </div>
+            <pre id="formatSample"></pre>
+          </div>
+
+          <div class="field" style="margin-top:14px">
+            <label for="bankText">Exam text (or paste JSON / CSV)</label>
+            <textarea id="bankText" rows="16" spellcheck="false" style="font-family:var(--mono);font-size:13px"></textarea>
+          </div>
+
+          <div class="row wrap">
+            <button class="btn btn-ghost" id="previewBank">Preview</button>
+            <button class="btn btn-primary" id="importBank">Import &amp; replace question bank</button>
+            <span class="tiny muted">Importing replaces the current bank. Existing student attempts keep the paper they started with.</span>
+          </div>
+
+          <div id="bankWarnings"></div>
+          <div class="bank-preview" id="bankPreview" style="margin-top:14px"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div id="drawerHost"></div>
+
+<script type="module" src="/js/teacher.js"></script>
+</body>
+</html>

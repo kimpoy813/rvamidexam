@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Examination in progress</title>
+<link rel="stylesheet" href="/css/app.css">
+<link rel="stylesheet" href="/css/exam.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%234f46e5'/><text x='50' y='68' font-size='52' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'>E</text></svg>">
+</head>
+<body class="exam-body">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+</svg>
+
+<!-- ------------------------------------------------------------ top bar -->
+<header class="appbar">
+  <div class="appbar-in">
+    <div class="brand">
+      <div class="brand-mark">EX</div>
+      <div>
+        <span class="brand-text" id="barTitle">Examination</span>
+        <span class="brand-sub" id="barStudent">—</span>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="vmeter" id="vmeter" title="Integrity events recorded against you">
+      <span class="dots" id="vdots"></span>
+      <span id="vlabel">0 flags</span>
+    </div>
+
+    <div class="timer" id="timer">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      <span id="timerText">--:--</span>
+    </div>
+
+    <button class="btn btn-ghost btn-sm" id="fsBtn" title="Return to full screen">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+      <span class="fs-label">Full screen</span>
+    </button>
+
+    <button class="btn btn-primary btn-sm" id="submitTopBtn">Submit</button>
+  </div>
+</header>
+
+<!-- ------------------------------------------------------------- body -->
+<div class="exam-main" id="examMain">
+
+  <!-- sidebar -->
+  <aside class="rail">
+    <div class="rail-card">
+      <div class="progress-ring">
+        <div class="ring">
+          <svg width="62" height="62">
+            <circle class="bg" cx="31" cy="31" r="26"></circle>
+            <circle class="fg" id="ringFg" cx="31" cy="31" r="26"
+                    stroke-dasharray="163.4" stroke-dashoffset="163.4"></circle>
+          </svg>
+          <div class="num" id="ringNum">0%</div>
+        </div>
+        <div>
+          <div style="font-size:20px;font-weight:750;letter-spacing:-.02em;font-variant-numeric:tabular-nums">
+            <span id="answeredCount">0</span><span class="muted" style="font-weight:600">/<span id="totalCount">0</span></span>
+          </div>
+          <div class="tiny muted">questions answered</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rail-card">
+      <div class="rail-head"><div class="t">Sections</div></div>
+      <div class="sections" id="sections"></div>
+    </div>
+
+    <div class="rail-card rail-rail-only">
+      <div class="rail-head"><div class="t">Question map</div></div>
+      <div class="palette" id="palette"></div>
+      <div class="legend">
+        <span><i style="background:#ecfdf5;border-color:#a7f3d0"></i> Answered</span>
+        <span><i style="background:#fff"></i> Blank</span>
+        <span><i style="background:#f1f5f9"></i> Locked</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- question -->
+  <main>
+    <div id="sectionIntro"></div>
+
+    <section class="qcard" id="qcard">
+      <div class="qcard-head">
+        <span class="qchip" id="qChip">Question 1</span>
+        <span class="qpoints" id="qPoints"></span>
+        <div class="spacer"></div>
+        <span class="tiny muted" id="qSectionName"></span>
+      </div>
+
+      <div class="qbody" id="qbody">
+        <div class="sk" style="height:26px;width:70%"></div>
+        <div class="sk" style="height:18px;width:45%;margin-top:12px"></div>
+        <div class="sk" style="height:52px;margin-top:24px"></div>
+        <div class="sk" style="height:52px;margin-top:10px"></div>
+      </div>
+
+      <div class="qfoot">
+        <button class="btn btn-ghost" id="prevBtn">← Previous</button>
+        <span class="tiny muted" id="lockNote"></span>
+        <button class="btn btn-primary" id="nextBtn">Next →</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ------------------------------------------------------------- dock -->
+<div class="dock">
+  <div class="dock-in">
+    <span class="save-state" id="saveState">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+      <span id="saveText">Saved</span>
+    </span>
+    <div class="spacer"></div>
+    <span class="tiny muted" id="dockProgress"></span>
+    <button class="btn btn-primary" id="submitBtn">Submit examination</button>
+  </div>
+</div>
+
+<!-- ---------------------------------------------------- blocking overlay -->
+<div class="veil hidden" id="veil">
+  <div class="veil-card">
+    <div class="veil-icon" id="veilIcon"></div>
+    <h2 id="veilTitle">Return to the exam</h2>
+    <p class="muted" id="veilBody" style="margin-top:8px"></p>
+    <div id="veilExtra" style="margin-top:14px"></div>
+    <button class="btn btn-primary btn-lg btn-block" id="veilBtn" style="margin-top:20px">
+      I understand — return to the exam
+    </button>
+  </div>
+</div>
+
+<div id="resultHost"></div>
+
+<script type="module" src="/js/exam.js"></script>
+</body>
+</html>

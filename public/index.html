@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Midterm Examination — Student Entry</title>
+<link rel="stylesheet" href="/css/app.css">
+<link rel="stylesheet" href="/css/exam.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%234f46e5'/><text x='50' y='68' font-size='52' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'>E</text></svg>">
+</head>
+<body>
+
+<main class="entry">
+  <div class="entry-grid">
+
+    <!-- ------------------------------------------------------- left: info -->
+    <section class="entry-hero">
+      <div class="brand">
+        <div class="brand-mark">EX</div>
+        <div>
+          <span class="brand-text" id="heroSchool">RVM</span>
+          <span class="brand-sub">Secure Online Examination</span>
+        </div>
+      </div>
+
+      <h1 id="heroTitle" style="margin-top:26px">Loading exam…</h1>
+      <p class="muted" id="heroMeta" style="margin-top:8px">&nbsp;</p>
+
+      <div class="hero-stats" id="heroStats"></div>
+
+      <div class="rules">
+        <h3 class="rules-title">Examination rules</h3>
+        <ul class="rules-list" id="rulesList">
+          <li><b>One hour, one attempt.</b> The timer starts the moment you begin and is tracked by the server — refreshing the page does not add time.</li>
+          <li><b>Full screen is required.</b> Leaving full screen, switching tabs or windows is recorded automatically.</li>
+          <li><b>No copying or pasting.</b> Copy, cut, paste, right-click and developer-tools shortcuts are blocked and logged.</li>
+          <li><b>One device, one tab.</b> Opening the exam a second time will be detected.</li>
+          <li><b>Questions are shuffled.</b> Your paper is in a different order from everyone else's.</li>
+          <li><b>Sections lock.</b> Once you move past a section you cannot return to it.</li>
+          <li>Your answers are <b>saved automatically</b> after every response.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------- right: form -->
+    <section class="card entry-panel">
+      <div class="card-pad">
+        <h2>Enter the examination</h2>
+        <p class="muted small" style="margin-top:4px">
+          Get the access code from your teacher before you start.
+        </p>
+
+        <form id="joinForm" style="margin-top:22px" autocomplete="off">
+          <div class="field">
+            <label for="fCode">Exam access code</label>
+            <input id="fCode" type="text" class="input-code" placeholder="ABC-123"
+                   maxlength="8" required spellcheck="false" inputmode="text">
+          </div>
+
+          <div class="field">
+            <label for="fName">Full name <span class="muted">(as it appears in the class record)</span></label>
+            <input id="fName" type="text" placeholder="e.g. Maria Santos" required maxlength="80">
+          </div>
+
+          <div class="two-col">
+            <div class="field">
+              <label for="fNo">Student number</label>
+              <input id="fNo" type="text" placeholder="e.g. 2024-0193" required maxlength="30">
+            </div>
+            <div class="field">
+              <label for="fSection">Class / section</label>
+              <input id="fSection" type="text" placeholder="e.g. Grade 10 - St. Mary" maxlength="40">
+            </div>
+          </div>
+
+          <label class="switch" style="margin-top:18px">
+            <input type="checkbox" id="fAgree">
+            <span class="track"></span>
+            <span>I have read the rules and I will answer this exam <b>honestly and independently</b>.</span>
+          </label>
+
+          <button class="btn btn-primary btn-lg btn-block" id="startBtn" type="submit" disabled style="margin-top:18px">
+            Start examination
+          </button>
+
+          <p class="tiny muted center" style="margin-top:14px">
+            Your name, student number, IP address and every integrity event are recorded
+            and visible to your teacher.
+          </p>
+        </form>
+      </div>
+
+      <div class="entry-foot">
+        <span id="clockLine" class="tiny muted"></span>
+        <a href="/teacher" class="tiny">Teacher sign in →</a>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<script type="module" src="/js/student-entry.js"></script>
+</body>
+</html>
