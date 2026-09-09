@@ -181,6 +181,16 @@ export class SseHub {
     this.timer = setInterval(() => this.send('ping', { at: Date.now() }), ms);
     this.timer.unref?.();
   }
+
+  /** End long-lived streams so an HTTP server can drain during shutdown. */
+  close() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    for (const client of this.clients) {
+      try { client.end(); } catch { /* connection already gone */ }
+    }
+    this.clients.clear();
+  }
 }
 
 export function clientIp(req) {

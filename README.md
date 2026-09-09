@@ -26,6 +26,7 @@ Then open:
 | Student entry | `http://localhost:4000/` | students |
 | Exam runner | `http://localhost:4000/exam` | students (after joining) |
 | Teacher dashboard | `http://localhost:4000/teacher` | you |
+| Question bank editor | `http://localhost:4000/admin` | you (teacher sign-in required) |
 
 The console prints the access code and the default teacher login on every start:
 
@@ -38,8 +39,10 @@ Change the teacher password immediately (**Exam setup → Access & security →
 Teacher password**). Override the defaults with `EXAM_TEACHER_USER`,
 `EXAM_TEACHER_PASSWORD` and `PORT` if you prefer.
 
-Everything is stored in `data/exam.sqlite` (git-ignored). Delete that file to start
-from scratch.
+Everything is stored in `data/exam.sqlite` (git-ignored). Exam setup saves
+automatically as you type; the green **Saved** badge confirms that SQLite has
+committed it. Closing and reopening the local server uses the same database. Delete
+that file only when you intentionally want to start from scratch.
 
 ---
 
@@ -130,16 +133,21 @@ and item analysis showing how the class did on each question. **Export CSV** pro
 one row per student with every answer, ready for a spreadsheet.
 
 **Exam setup** — title, subject, term, duration, instructions, access code, and every
-anti-cheating control as a toggle.
+anti-cheating control as a toggle. Changes auto-save after a short pause (and
+immediately when leaving a field); a persistent-storage banner plus visible
+**Unsaved / Saving / Saved / Save failed** state makes durability explicit.
 
 ---
 
 ## Loading your own questions
 
-Go to **/teacher → Exam setup → Question bank**, paste your exam and press
-**Preview**, then **Import**. Plain text, JSON and CSV are all accepted. The bank
-you import **replaces the currently selected exam** (see the switcher in the top
-bar), so create a separate exam first if you want to keep the current one.
+Go to **/teacher → Questions** (or open **/admin**), paste your exam and press
+**Preview pasted questions**. The teacher preview shows every item with the same
+response control students will receive. Use the type menu on an item (or **Edit**
+for its prompt, answer key, choices, and points), then press **Save question bank**.
+Plain text, JSON and CSV are all accepted. The bank you save **replaces the
+currently selected exam** (see the switcher in the top bar), so create a separate
+exam first if you want to keep the current one.
 
 ### From a Word, PDF or Excel file
 
@@ -216,8 +224,9 @@ Ans: Au | gold
 | trailing `*` | marks the correct choice |
 | `[n]` | points for the item (default 1) |
 | `(multi)` | allow several correct choices (partial credit) |
+| `(short)` | force a typed short answer (including when the key is `TRUE` or `FALSE`) |
 | `Ans: x \| y` | answer key; `\|` lists accepted spellings |
-| `Ans: TRUE` / `FALSE` | becomes a True/False item |
+| `Ans: TRUE` / `FALSE` | becomes a True/False item unless `(short)` or modified True/False directions require typing |
 | `//` | essay, graded manually |
 
 An item with no key is kept and graded manually rather than discarded. **Preview**
@@ -340,7 +349,10 @@ the entry form validating.
 
 `tests/teacher-ui.test.js` does the same for the dashboard: a live class rendering,
 a flagged student called out, the detail drawer with inline grading, the scoreboard
-and item analysis, and the setup tab reflecting saved settings.
+and item analysis, question preview/editing, and exam setup auto-saving across a
+fresh dashboard open. `tests/persistence.test.js` starts a real server, changes the
+complete setup, sends the same `SIGTERM` used by Render, starts a second process on
+the same SQLite file, and verifies every setting is still present.
 
 The two UI layers exist because a syntax check happily passes a page whose click
 handler assigns to a `const` — that only throws when a student actually clicks.
@@ -373,12 +385,19 @@ deploys you must attach a **persistent disk** (this requires a paid plan):
 
 1. In the Render dashboard, open your service → **Disks** → **Add disk**.
 2. Set the mount path to `/opt/render/project/src/data`.
-3. Add the environment variable `EXAM_DATA_DIR` = `/opt/render/project/src/data`.
+3. Add `EXAM_DATA_DIR=/opt/render/project/src/data` and
+   `EXAM_STORAGE_MODE=persistent` in the service's environment.
+4. Redeploy once, then verify that **Persistent storage connected** appears at the
+   top of **Exam setup**.
 
-The `render.yaml` blueprint already declares this disk and variable (on the
-`starter` plan). If you stay on the **free** plan, remove the `disk:` block and
-`EXAM_DATA_DIR` from `render.yaml`, and be aware that all data resets on each
-deploy.
+The `render.yaml` Blueprint already declares the Starter plan, 1 GB disk, mount,
+and both variables. This declaration only provisions a disk when the service is
+created/synced as a Blueprint; it cannot silently attach one to a separately
+created free service. If the dashboard instead says **Storage is temporary**, the
+service has not been given durable storage and a restart can still recreate the
+sample defaults. On Render's free plan there is no persistent disk, so keeping
+SQLite data across deploys requires upgrading or moving the database to an
+external durable service.
 
 Until the password is changed, the sign-in page and the startup banner show the
 default credentials; once you change it they stop advertising it.
@@ -391,5 +410,6 @@ default credentials; once you change it they stop advertising it.
 | `HOST` | `0.0.0.0` | bind address |
 | `EXAM_DATA_DIR` | `./data` | where the database lives (point this at a persistent disk on Render) |
 | `EXAM_DB` | `$EXAM_DATA_DIR/exam.sqlite` | database path |
+| `EXAM_STORAGE_MODE` | _(local disk)_ | set to `persistent` when the hosted data path is an attached durable disk; drives the dashboard deployment check |
 | `EXAM_TEACHER_USER` | `teacher` | teacher username |
 | `EXAM_TEACHER_PASSWORD` | `rvm-exam-2026` | teacher password used at first boot only |

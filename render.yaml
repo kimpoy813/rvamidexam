@@ -18,8 +18,9 @@
 #     from this blueprint, change the existing service (Dashboard → your
 #     service → Settings → Environment) from "Go" to "Node", set Build Command
 #     to `npm install`, Start Command to `npm start`, then add a persistent
-#     disk on the service's Disks page mounted at /opt/render/project/src/data
-#     and set the EXAM_DATA_DIR environment variable to the same path.
+#     disk on the service's Disks page mounted at /opt/render/project/src/data,
+#     set EXAM_DATA_DIR to that same path, and set
+#     EXAM_STORAGE_MODE=persistent.
 
 services:
   - type: web
@@ -35,6 +36,8 @@ services:
         value: "22"
       - key: EXAM_DATA_DIR
         value: /opt/render/project/src/data
+      - key: EXAM_STORAGE_MODE
+        value: persistent
     disk:
       name: exam-data
       mountPath: /opt/render/project/src/data

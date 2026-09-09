@@ -14,6 +14,11 @@ const state = {
   roster: null,
   results: null,
   settings: null,
+  settingsLoaded: false,
+  settingsDirty: false,
+  settingsSaving: false,
+  settingsRevision: 0,
+  storage: null,
   exams: [],
   currentExamId: null,
   filter: 'all',
@@ -24,8 +29,24 @@ const state = {
   poll: null,
   allPoll: null,
   lastFeedAt: 0,
-  drawerToken: null
+  drawerToken: null,
+  // Structured question-bank draft shown in the teacher preview. Raw pasted
+  // text is parsed into this object once; edits are then saved as JSON so a
+  // type correction in the preview can never be lost by re-parsing the text.
+  bankDraft: null,
+  bankDraftSource: '',
+  bankTextStale: false,
+  bankDraftDirty: false,
+  bankDraftTitleExplicit: false,
+  bankEditing: null,
+  bankEditingSection: null,
+  bankWarnings: [],
+  bankKeyApplied: []
 };
+
+let setupSaveTimer = null;
+let setupSaveQueued = false;
+let pendingSaveNotice = '';
 
 /* ==================================================================== auth */
 
@@ -60,8 +81,11 @@ function showApp() {
   connect();
   loadExams();
   loadSettings();
+  loadStorage();
   loadExam();
   refreshResults();
+  // /admin is the direct question-bank shortcut printed by the server.
+  if (location.pathname === '/admin') switchTab('questions');
   setInterval(() => paintRoster(state.roster), 1000); // keep "ago" labels fresh
 }
 
@@ -118,8 +142,21 @@ function paintExams() {
     b.addEventListener('click', () => deleteExamRow(b.dataset.del)));
 }
 
+function canDiscardBankChanges(action = 'continue') {
+  if (!state.bankDraftDirty && !state.bankTextStale) return true;
+  return confirm(`You have unsaved question-bank changes. Discard them and ${action}?`);
+}
+
 async function switchExam(id) {
   if (id === state.currentExamId) return;
+  if (!canDiscardBankChanges('switch exams')) {
+    $('#examSelect').value = state.currentExamId;
+    return;
+  }
+  if (!(await flushSetupSave())) {
+    $('#examSelect').value = state.currentExamId;
+    return;
+  }
   try {
     await api(`/api/teacher/exams/${id}/select`, { method: 'POST', body: {} });
     await reloadForExam();
@@ -132,12 +169,20 @@ async function switchExam(id) {
 async function reloadForExam() {
   await loadExams();
   connect(); // re-subscribe the live stream to the new current exam
-  await loadSettings();
-  await loadExam();
+  await loadSettings({ force: true });
+  // Never leave the previous exam's pasted text or draft visible after using
+  // the exam switcher.
+  state.bankDraft = null;
+  state.bankTextStale = false;
+  state.bankDraftDirty = false;
+  state.bankDraftTitleExplicit = false;
+  await loadExam({ force: true });
   refreshResults();
 }
 
 async function newExam() {
+  if (!canDiscardBankChanges('create a new exam')) return;
+  if (!(await flushSetupSave())) return;
   const title = prompt('New exam title:');
   if (title === null) return;
   try {
@@ -151,6 +196,8 @@ async function newExam() {
 }
 
 async function duplicateExamRow(id) {
+  if (!canDiscardBankChanges('duplicate this exam')) return;
+  if (!(await flushSetupSave())) return;
   try {
     await api(`/api/teacher/exams/${id}/duplicate`, { method: 'POST', body: {} });
     await reloadForExam();
@@ -164,6 +211,7 @@ async function deleteExamRow(id) {
   const exam = state.exams.find((e) => e.id === id);
   if (!exam) return;
   if (!confirm(`Delete "${exam.title}" and every one of its student attempts?\n\nThis cannot be undone.`)) return;
+  if (!(await flushSetupSave())) return;
   try {
     await api(`/api/teacher/exams/${id}`, { method: 'DELETE' });
     await reloadForExam();
@@ -194,6 +242,7 @@ $('#loginForm').addEventListener('submit', async (e) => {
 });
 
 $('#logoutBtn').addEventListener('click', async () => {
+  if (state.settingsDirty && !(await flushSetupSave())) return;
   await api('/api/teacher/logout', { method: 'POST' }).catch(() => {});
   localStorage.removeItem('rvm_teacher_token');
   location.reload();
@@ -208,10 +257,15 @@ $$('.tab').forEach((btn) => {
 function switchTab(name) {
   state.tab = name;
   $$('.tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
-  ['live', 'results', 'setup'].forEach((t) =>
-    $(`#tab-${t}`).classList.toggle('hidden', t !== name));
+  ['live', 'results', 'setup', 'questions'].forEach((t) => {
+    // Keep the question bank at the end of Exam setup for the familiar flow,
+    // while also giving it a dedicated one-click Questions tab.
+    const visible = t === name || (name === 'setup' && t === 'questions');
+    $(`#tab-${t}`).classList.toggle('hidden', !visible);
+  });
   if (name === 'results') refreshResults();
   if (name === 'setup') loadSettings();
+  if (name === 'questions') loadExam();
 }
 
 /* ============================================================== live feed */
@@ -823,30 +877,92 @@ $('#exportCsv').addEventListener('click', async () => {
 
 /* ================================================================== setup */
 
-async function loadSettings() {
+const SETUP_FIELDS = [
+  'sTitle', 'sSchool', 'sSubject', 'sTerm', 'sDuration', 'sInstructions',
+  'sNotes', 'sMaxV', 'sAutoSubmit', 'sOpen', 'sShow', 'sShuffleQ',
+  'sShuffleC', 'sLock', 'sFs', 'sResume'
+];
+
+function setSetupSaveStatus(label, tone = 'idle') {
+  const badge = $('#setupSaveState');
+  badge.textContent = label;
+  badge.className = `pill pill-${tone}`;
+}
+
+function restoreStorageTone() {
+  if (!state.storage) return;
+  const replaced = Boolean(state.storage.storageWasReplaced);
+  $('#storageStatus').classList.toggle('bad', replaced);
+  $('#storageStatus').classList.toggle('warn', !state.storage.durable && !replaced);
+}
+
+async function loadStorage() {
+  const card = $('#storageStatus');
+  try {
+    const info = await api('/api/teacher/storage');
+    const previousStorageId = localStorage.getItem('rvm_exam_storage_id');
+    const storageWasReplaced = Boolean(previousStorageId && info.storageId && previousStorageId !== info.storageId);
+    if (info.storageId) localStorage.setItem('rvm_exam_storage_id', info.storageId);
+    state.storage = { ...info, storageWasReplaced };
+    card.classList.toggle('warn', !info.durable && !storageWasReplaced);
+    card.classList.toggle('bad', storageWasReplaced);
+    $('#storageIcon').textContent = storageWasReplaced ? '!' : (info.durable ? '✓' : '!');
+    $('#storageTitle').textContent = storageWasReplaced
+      ? 'The database was replaced since your last visit'
+      : info.durable
+        ? (info.mode === 'persistent-disk' ? 'Persistent storage connected' : 'Setup stored on this computer')
+        : 'Storage is temporary — setup can reset';
+    $('#storageDetail').textContent = storageWasReplaced
+      ? 'This usually means the host restarted without an attached persistent disk. Save the setup again and fix the storage configuration before the exam.'
+      : info.warning || (info.mode === 'persistent-disk'
+        ? 'Changes are written to the attached data disk and survive service restarts and redeploys.'
+        : 'Exam details and controls save automatically to SQLite and remain after reopening the system.');
+  } catch (err) {
+    card.classList.add('warn');
+    $('#storageIcon').textContent = '?';
+    $('#storageTitle').textContent = 'Could not verify data storage';
+    $('#storageDetail').textContent = err.message;
+  }
+}
+
+function applySettings(s) {
+  $('#sTitle').value = s.exam_title;
+  $('#sSchool').value = s.school;
+  $('#sSubject').value = s.subject;
+  $('#sTerm').value = s.term;
+  $('#sDuration').value = s.duration_minutes;
+  $('#sInstructions').value = s.instructions;
+  $('#sNotes').value = s.proctor_notes;
+  $('#sMaxV').value = s.max_violations;
+  $('#sAutoSubmit').checked = s.auto_submit_on_violations === '1';
+  $('#sOpen').checked = s.exam_open === '1';
+  $('#sShow').checked = s.show_result_to_student === '1';
+  $('#sShuffleQ').checked = s.shuffle_questions === '1';
+  $('#sShuffleC').checked = s.shuffle_choices === '1';
+  $('#sLock').checked = s.lock_sections === '1';
+  $('#sFs').checked = s.require_fullscreen === '1';
+  $('#sResume').checked = s.allow_resume === '1';
+  $('#dTitle').textContent = s.exam_title;
+  $('#codeText').textContent = s.access_code;
+}
+
+async function loadSettings({ force = false } = {}) {
+  // A late GET must never overwrite fields the teacher has already edited.
+  if (state.settingsDirty && !force) return state.settings;
+  const revisionAtRequest = state.settingsRevision;
   try {
     const s = await api('/api/teacher/settings');
+    if (!force && (state.settingsDirty || revisionAtRequest !== state.settingsRevision)) return state.settings;
     state.settings = s;
-    $('#sTitle').value = s.exam_title;
-    $('#sSchool').value = s.school;
-    $('#sSubject').value = s.subject;
-    $('#sTerm').value = s.term;
-    $('#sDuration').value = s.duration_minutes;
-    $('#sInstructions').value = s.instructions;
-    $('#sNotes').value = s.proctor_notes;
-    $('#sMaxV').value = s.max_violations;
-    $('#sAutoSubmit').checked = s.auto_submit_on_violations === '1';
-    $('#sOpen').checked = s.exam_open === '1';
-    $('#sShow').checked = s.show_result_to_student === '1';
-    $('#sShuffleQ').checked = s.shuffle_questions === '1';
-    $('#sShuffleC').checked = s.shuffle_choices === '1';
-    $('#sLock').checked = s.lock_sections === '1';
-    $('#sFs').checked = s.require_fullscreen === '1';
-    $('#sResume').checked = s.allow_resume === '1';
-    $('#dTitle').textContent = s.exam_title;
-    $('#codeText').textContent = s.access_code;
+    state.settingsLoaded = true;
+    state.settingsDirty = false;
+    applySettings(s);
+    setSetupSaveStatus('Saved', 'live');
+    return s;
   } catch (err) {
+    setSetupSaveStatus('Load failed', 'bad');
     if (err.status === 401) showLogin();
+    return null;
   }
 }
 
@@ -871,34 +987,158 @@ function collectSettings() {
   };
 }
 
-$('#saveSettings').addEventListener('click', async () => {
-  try {
-    await api('/api/teacher/settings', { method: 'POST', body: collectSettings() });
-    toast('Exam details saved.', 'ok');
-    loadSettings();
-  } catch (err) { toast(err.message, 'bad'); }
+function cacheSavedSettings(saved) {
+  state.settings = saved;
+  $('#dTitle').textContent = saved.exam_title;
+  $('#codeText').textContent = saved.access_code;
+  const exam = state.exams.find((item) => item.id === state.currentExamId);
+  if (exam) {
+    exam.title = saved.exam_title;
+    exam.access_code = saved.access_code;
+    exam.settings = saved;
+    paintExams();
+  }
+}
+
+function queueSetupSave({ immediate = false, notice = '' } = {}) {
+  if (!state.settingsLoaded) return;
+  state.settingsDirty = true;
+  state.settingsRevision += 1;
+  if (notice) pendingSaveNotice = notice;
+  setSetupSaveStatus(immediate ? 'Saving…' : 'Unsaved changes', immediate ? 'info' : 'warn');
+  clearTimeout(setupSaveTimer);
+  if (state.settingsSaving) setupSaveQueued = true;
+  setupSaveTimer = setTimeout(() => saveSetup(), immediate ? 0 : 650);
+}
+
+let activeSetupSave = null;
+async function saveSetup({ notice = '', force = false } = {}) {
+  if (notice) pendingSaveNotice = notice;
+  clearTimeout(setupSaveTimer);
+  setupSaveTimer = null;
+  if (!state.settingsLoaded) return false;
+
+  if (activeSetupSave) {
+    setupSaveQueued = true;
+    const ok = await activeSetupSave;
+    return ok && state.settingsDirty ? saveSetup() : ok;
+  }
+
+  if (!state.settingsDirty && !force) {
+    setSetupSaveStatus('Saved', 'live');
+    if (pendingSaveNotice) {
+      toast(pendingSaveNotice, 'ok');
+      pendingSaveNotice = '';
+    }
+    return true;
+  }
+
+  const revision = state.settingsRevision;
+  const payload = collectSettings();
+  state.settingsSaving = true;
+  setSetupSaveStatus('Saving…', 'info');
+
+  activeSetupSave = (async () => {
+    try {
+      const saved = await api('/api/teacher/settings', { method: 'POST', body: payload });
+      cacheSavedSettings(saved);
+      restoreStorageTone();
+      if (revision === state.settingsRevision) {
+        state.settingsDirty = false;
+        setSetupSaveStatus(`Saved ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, 'live');
+      } else {
+        setupSaveQueued = true;
+      }
+      return true;
+    } catch (err) {
+      state.settingsDirty = true;
+      setSetupSaveStatus('Save failed — retry', 'bad');
+      $('#storageStatus').classList.add('bad');
+      toast(`Setup was not saved: ${err.message}`, 'bad', 5000);
+      pendingSaveNotice = '';
+      return false;
+    } finally {
+      state.settingsSaving = false;
+    }
+  })();
+
+  const ok = await activeSetupSave;
+  activeSetupSave = null;
+  const repeat = setupSaveQueued;
+  setupSaveQueued = false;
+  if (ok && repeat && state.settingsDirty) return saveSetup();
+  if (ok && pendingSaveNotice) {
+    toast(pendingSaveNotice, 'ok');
+    pendingSaveNotice = '';
+  }
+  return ok;
+}
+
+async function flushSetupSave() {
+  clearTimeout(setupSaveTimer);
+  setupSaveTimer = null;
+  return saveSetup();
+}
+
+SETUP_FIELDS.forEach((id) => {
+  const field = $(`#${id}`);
+  if (field.type === 'checkbox') {
+    field.addEventListener('change', () => {
+      const notice = id === 'sOpen'
+        ? (field.checked ? 'Exam opened to students.' : 'Exam closed — no new entries.')
+        : '';
+      queueSetupSave({ immediate: true, notice });
+    });
+  } else {
+    field.addEventListener('input', () => queueSetupSave());
+    // Save immediately when a teacher leaves a field, without waiting for the
+    // debounce timer (important if the browser is closed right afterwards).
+    field.addEventListener('change', () => queueSetupSave({ immediate: true }));
+  }
 });
 
-$('#saveSecurity').addEventListener('click', async () => {
-  try {
-    await api('/api/teacher/settings', { method: 'POST', body: collectSettings() });
-    toast('Anti-cheating controls saved.', 'ok');
-  } catch (err) { toast(err.message, 'bad'); }
-});
-
-$('#sOpen').addEventListener('change', async (e) => {
-  try {
-    await api('/api/teacher/settings', { method: 'POST', body: { exam_open: e.target.checked } });
-    toast(e.target.checked ? 'Exam opened to students.' : 'Exam closed — no new entries.', e.target.checked ? 'ok' : 'warn');
-  } catch (err) { toast(err.message, 'bad'); e.target.checked = !e.target.checked; }
-});
+$('#saveSettings').addEventListener('click', () =>
+  saveSetup({ notice: 'Exam details saved.', force: true }));
+$('#saveSecurity').addEventListener('click', () =>
+  saveSetup({ notice: 'Anti-cheating controls saved.', force: true }));
+$('#saveSetupNow').addEventListener('click', () =>
+  saveSetup({ notice: 'All exam setup saved.', force: true }));
 
 $('#newCode').addEventListener('click', async () => {
+  if (!(await flushSetupSave())) return;
   try {
+    setSetupSaveStatus('Saving…', 'info');
     const s = await api('/api/teacher/settings', { method: 'POST', body: { new_access_code: true } });
-    $('#codeText').textContent = s.access_code;
+    cacheSavedSettings(s);
+    state.settingsDirty = false;
+    restoreStorageTone();
+    setSetupSaveStatus('Saved', 'live');
     toast(`New access code: ${s.access_code}`, 'ok');
-  } catch (err) { toast(err.message, 'bad'); }
+  } catch (err) {
+    setSetupSaveStatus('Save failed — retry', 'bad');
+    toast(err.message, 'bad');
+  }
+});
+
+function saveSetupOnPageHide() {
+  if (!state.settingsLoaded || !state.settingsDirty) return;
+  clearTimeout(setupSaveTimer);
+  setupSaveTimer = null;
+  // keepalive allows this final request to finish while the tab is closing.
+  fetch('/api/teacher/settings', {
+    method: 'POST',
+    keepalive: true,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Teacher-Token': localStorage.getItem('rvm_teacher_token') || ''
+    },
+    body: JSON.stringify(collectSettings())
+  }).catch(() => {});
+}
+
+window.addEventListener('pagehide', saveSetupOnPageHide);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && state.settingsDirty) saveSetup();
 });
 
 $('#codeCopy').addEventListener('click', async () => {
@@ -929,6 +1169,15 @@ $('#resetAttempts').addEventListener('click', async () => {
 
 /* --------------------------------------------------------- question bank */
 
+const BANK_KINDS = [
+  ['mcq', 'Multiple choice'],
+  ['multiselect', 'Multiple select'],
+  ['truefalse', 'True / False'],
+  ['short', 'Short answer'],
+  ['essay', 'Essay']
+];
+const BANK_KIND_SET = new Set(BANK_KINDS.map(([value]) => value));
+
 const SAMPLE_FORMAT = `# Part I. Multiple Choice
 Choose the letter of the best answer.
 
@@ -944,19 +1193,21 @@ D. Mars
 - 4
 - 5 *
 
-# Part II. True or False
-Write TRUE or FALSE.
+# Part II. Modified True or False
+Write TRUE if correct. If false, write the word that makes the statement incorrect.
 
-3. Water boils at 100 °C at sea level.
+3.The sky appears blue because of light scattering. (short)
 Ans: TRUE
 
-# Part III. Identification
+4.Whitespace is wasted space. (short)
+Ans: FALSE | WASTED | ACTIVE
 
-4. What is the chemical symbol for gold?
+# Part III. Identification
+5. What is the chemical symbol for gold? (short)
 Ans: Au | gold
 
 # Part IV. Essay
-5. Explain why the sky appears blue. //  [10]`;
+6. Explain why the sky appears blue. //  [10]`;
 
 $('#loadSampleText').addEventListener('click', () => {
   const help = $('#formatHelp');
@@ -964,92 +1215,682 @@ $('#loadSampleText').addEventListener('click', () => {
   $('#formatSample').textContent = SAMPLE_FORMAT;
 });
 
-async function loadExam() {
+function cloneBank(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function bankCounts(sections = state.bankDraft?.sections || []) {
+  return {
+    sections: sections.length,
+    questions: sections.reduce((n, sec) => n + (sec.questions?.length || 0), 0),
+    points: sections.reduce(
+      (n, sec) => n + (sec.questions || []).reduce((m, q) => m + Number(q.points || 0), 0),
+      0
+    )
+  };
+}
+
+function setBankDraft(data, {
+  sourceText = $('#bankText').value,
+  dirty = false,
+  titleExplicit = false,
+  warnings = [],
+  keyApplied = []
+} = {}) {
+  state.bankDraft = {
+    title: data.title || state.settings?.exam_title || $('#sTitle').value || 'Untitled Exam',
+    sections: cloneBank(data.sections || data.blueprint || [])
+  };
+  state.bankDraftSource = sourceText;
+  state.bankTextStale = false;
+  state.bankDraftDirty = dirty;
+  state.bankDraftTitleExplicit = titleExplicit;
+  state.bankEditing = null;
+  state.bankEditingSection = null;
+  state.bankWarnings = warnings || [];
+  state.bankKeyApplied = keyApplied || [];
+  paintBankWarnings();
+  renderBankDraft();
+  updateBankStatus();
+}
+
+async function loadExam({ force = false } = {}) {
   try {
     const data = await api('/api/teacher/exam');
-    $('#bankCount').textContent =
-      `${data.counts.sections} parts · ${data.counts.questions} items · ${data.counts.points} pts`;
-    if (!$('#bankText').value.trim()) $('#bankText').value = data.text;
-    paintPreview(data.blueprint, []);
+    const canReplace = force || !state.bankDraft || (!state.bankDraftDirty && !state.bankTextStale);
+    if (canReplace) {
+      $('#bankText').value = data.text;
+      setBankDraft(
+        { title: data.title, sections: data.blueprint },
+        { sourceText: data.text, dirty: false }
+      );
+    } else {
+      const c = data.counts;
+      $('#bankCount').textContent = `${c.sections} parts · ${c.questions} items · ${c.points} pts`;
+    }
   } catch { /* not signed in yet */ }
 }
 
-$('#loadCurrent').addEventListener('click', async () => {
-  const data = await api('/api/teacher/exam');
-  $('#bankText').value = data.text;
-  paintPreview(data.blueprint, []);
-  toast('Current question bank loaded into the editor.', 'ok');
+$('#bankText').addEventListener('input', () => {
+  state.bankTextStale = $('#bankText').value !== state.bankDraftSource;
+  updateBankStatus();
 });
+
+$('#loadCurrent').addEventListener('click', async () => {
+  if ((state.bankDraftDirty || state.bankTextStale) &&
+      !confirm('Discard the unsaved pasted text and preview edits, then reload the saved question bank?')) return;
+  await loadExam({ force: true });
+  toast('Saved question bank reloaded.', 'ok');
+});
+
+async function parsePastedBank() {
+  const source = $('#bankText').value;
+  const res = await fetch('/api/teacher/parse', {
+    method: 'POST',
+    headers: {
+      'X-Teacher-Token': localStorage.getItem('rvm_teacher_token'),
+      'Content-Type': 'text/plain'
+    },
+    body: source
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Could not read that text.');
+  setBankDraft(
+    { title: data.title, sections: data.sections },
+    {
+      sourceText: source,
+      dirty: true,
+      titleExplicit: data.titleExplicit === true,
+      warnings: data.warnings || [],
+      keyApplied: data.keyApplied || []
+    }
+  );
+  return data;
+}
 
 $('#previewBank').addEventListener('click', async () => {
   try {
-    const res = await fetch('/api/teacher/parse', {
-      method: 'POST',
-      headers: {
-        'X-Teacher-Token': localStorage.getItem('rvm_teacher_token'),
-        'Content-Type': 'text/plain'
-      },
-      body: $('#bankText').value
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Could not read that text.');
-    paintPreview(data.sections, data.warnings || [], data.keyApplied);
-    toast(`Read ${data.counts.questions} items in ${data.counts.sections} parts (${data.counts.points} pts).`, 'ok');
+    const data = await parsePastedBank();
+    toast(
+      `Read ${data.counts.questions} items in ${data.counts.sections} parts (${data.counts.points} pts). Review the types below.`,
+      'ok',
+      4200
+    );
   } catch (err) {
     toast(err.message, 'bad');
   }
 });
 
 $('#importBank').addEventListener('click', async () => {
-  if (!confirm('Replace the entire question bank with this text?\n\nExisting submitted attempts keep the paper they started with.')) return;
   try {
-    const res = await fetch('/api/teacher/exam', {
+    // If the teacher changed the paste box after the last preview, parse those
+    // latest words first. Otherwise save the structured draft, including every
+    // type/key correction made in the preview editor.
+    if (!state.bankDraft || state.bankTextStale) await parsePastedBank();
+    validateBankDraft(state.bankDraft);
+
+    const counts = bankCounts();
+    if (!confirm(
+      `Save ${counts.questions} questions in ${counts.sections} parts?\n\n` +
+      'This replaces the selected exam’s saved question bank.'
+    )) return;
+    if (!(await flushSetupSave())) return;
+
+    const data = await api('/api/teacher/exam', {
       method: 'POST',
-      headers: {
-        'X-Teacher-Token': localStorage.getItem('rvm_teacher_token'),
-        'Content-Type': 'text/plain'
-      },
-      body: $('#bankText').value
+      body: {
+        title: state.bankDraftTitleExplicit
+          ? state.bankDraft.title
+          : ($('#sTitle').value.trim() || state.settings?.exam_title || state.bankDraft.title),
+        sections: state.bankDraft.sections
+      }
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Import failed.');
-    toast(`Imported ${data.counts.questions} items.`, 'ok');
-    paintPreview((await api('/api/teacher/exam')).blueprint, data.warnings || [], data.keyApplied);
-    loadExam();
-    // An import adopts the paper's own title, so the settings form is stale until
-    // it is re-read. Left alone, the old title would sit in the field and a
-    // later "Save settings" would silently write it back over the new one.
+
+    toast(`Saved ${data.counts.questions} questions.`, 'ok');
     await loadSettings();
+    await loadExams();
+    await loadExam({ force: true });
     refreshResults();
   } catch (err) {
-    toast(err.message, 'bad');
+    toast(err.message, 'bad', 5000);
   }
 });
 
-function paintPreview(sections, warnings, keyApplied) {
-  const keyNote = keyApplied?.length
-    ? `<div class="warn-box" style="border-color:var(--good,#2e7d32)"><b>Answer key read</b>
-        &nbsp;applied to ${keyApplied.length} item(s): ${escapeHtml(keyApplied.join(', '))}</div>`
+function paintBankWarnings() {
+  const keyNote = state.bankKeyApplied.length
+    ? `<div class="warn-box" style="border-color:#a7f3d0;background:var(--ok-soft);color:#047857"><b>Answer key read</b>
+        &nbsp;applied to ${state.bankKeyApplied.length} item(s): ${escapeHtml(state.bankKeyApplied.join(', '))}</div>`
     : '';
 
   $('#bankWarnings').innerHTML =
-    (warnings?.length
-      ? `<div class="warn-box"><b>${warnings.length} thing(s) to check</b><ul>
-        ${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul></div>`
+    (state.bankWarnings.length
+      ? `<div class="warn-box"><b>${state.bankWarnings.length} thing(s) to check</b><ul>
+        ${state.bankWarnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul></div>`
       : '') + keyNote;
+}
 
-  $('#bankPreview').innerHTML = sections.length ? sections.map((sec) => `
-    <div class="bp-sec">
-      <h4>${escapeHtml(sec.title)} <span class="tiny muted">· ${sec.questions.length} items ·
-        ${sec.questions.reduce((n, q) => n + Number(q.points || 0), 0)} pts</span></h4>
-      ${sec.instructions ? `<div class="tiny muted" style="margin-top:3px">${escapeHtml(sec.instructions)}</div>` : ''}
-      ${sec.questions.slice(0, 6).map((q, i) => `
-        <div class="bp-q"><span class="n">${i + 1}.</span>
-          <span>${escapeHtml(truncate(q.prompt, 100))}
-            <span class="tiny muted"> · ${q.kind}${q.answer === null || q.answer === undefined ? ' · no key' : ''}</span>
-          </span></div>`).join('')}
-      ${sec.questions.length > 6 ? `<div class="tiny muted" style="padding-top:6px">+ ${sec.questions.length - 6} more</div>` : ''}
-    </div>`).join('') : '<div class="feed-empty">Nothing to show yet.</div>';
+function bankKindOptions(selected, placeholder = false) {
+  return `${placeholder ? '<option value="">Set every item type…</option>' : ''}${BANK_KINDS.map(([value, label]) =>
+    `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`
+  ).join('')}`;
+}
+
+function answerValues(answer) {
+  if (answer === null || answer === undefined || answer === '') return [];
+  return Array.isArray(answer) ? answer.map(String) : [String(answer)];
+}
+
+function booleanAnswer(answer) {
+  const values = answerValues(answer);
+  const found = values.find((v) => /^(true|false|t|f|yes|no)$/i.test(v.trim()));
+  if (!found) return null;
+  return /^(true|t|yes)$/i.test(found.trim()) ? 'True' : 'False';
+}
+
+function canonicalBoolean(answer) {
+  return booleanAnswer(answer) || 'True';
+}
+
+function answerMatchesChoice(answer, choice) {
+  const wanted = String(choice).trim().toLocaleLowerCase();
+  return answerValues(answer).some((value) => value.trim().toLocaleLowerCase() === wanted);
+}
+
+function renderResponsePreview(q) {
+  if (q.kind === 'mcq' || q.kind === 'multiselect') {
+    const choices = q.choices || [];
+    return `<div class="bp-response">
+      ${choices.length ? `<div class="bp-choice-list">${choices.map((choice, i) => `
+        <div class="bp-choice ${answerMatchesChoice(q.answer, choice) ? 'is-key' : ''}">
+          <span class="bp-choice-key">${String.fromCharCode(65 + i)}</span>
+          <span class="grow">${escapeHtml(choice)}</span>
+          ${answerMatchesChoice(q.answer, choice) ? '<span class="tiny">✓ key</span>' : ''}
+        </div>`).join('')}</div>` : '<div class="tiny muted">No choices yet — choose Edit to add them.</div>'}
+    </div>`;
+  }
+
+  if (q.kind === 'truefalse') {
+    const expected = canonicalBoolean(q.answer);
+    return `<div class="bp-response"><div class="bp-tf">
+      ${['True', 'False'].map((value) =>
+        `<div class="bp-tf-option ${value === expected && q.answer != null ? 'is-key' : ''}">${value}${value === expected && q.answer != null ? ' · key' : ''}</div>`
+      ).join('')}
+    </div></div>`;
+  }
+
+  if (q.kind === 'essay') {
+    return '<div class="bp-response"><div class="bp-student-input essay">Student writes a long response…</div></div>';
+  }
+
+  return '<div class="bp-response"><div class="bp-student-input">Student types a short answer…</div></div>';
+}
+
+function renderQuestionEditor(q, si, qi) {
+  const key = `${si}:${qi}`;
+  const choices = (q.choices || []).join('\n');
+  const answers = answerValues(q.answer).join('\n');
+  const kind = BANK_KIND_SET.has(q.kind) ? q.kind : 'short';
+  const showChoices = kind === 'mcq' || kind === 'multiselect';
+  const showTextAnswer = showChoices || kind === 'short';
+  const showTf = kind === 'truefalse';
+
+  return `<div class="bp-editor" data-bank-editor="${key}">
+    <div class="bp-editor-grid">
+      <div class="field">
+        <label>Question type</label>
+        <select data-edit-kind>${bankKindOptions(kind)}</select>
+      </div>
+      <div class="field">
+        <label>Points</label>
+        <input type="number" min="0.1" max="10000" step="0.1" data-edit-points value="${escapeHtml(q.points ?? 1)}">
+      </div>
+    </div>
+    <div class="field">
+      <label>Question / statement</label>
+      <textarea rows="3" data-edit-prompt>${escapeHtml(q.prompt || '')}</textarea>
+    </div>
+    <div class="field ${showChoices ? '' : 'hidden'}" data-edit-choices-wrap>
+      <label>Choices <span class="muted">— one per line</span></label>
+      <textarea class="bp-lines" rows="4" data-edit-choices>${escapeHtml(choices)}</textarea>
+    </div>
+    <div class="field ${showTextAnswer ? '' : 'hidden'}" data-edit-answer-wrap>
+      <label>Answer key <span class="muted">— accepted answers, one per line; leave blank for manual grading</span></label>
+      <textarea class="bp-lines" rows="3" data-edit-answer>${escapeHtml(answers)}</textarea>
+    </div>
+    <div class="field ${showTf ? '' : 'hidden'}" data-edit-tf-wrap>
+      <label>Correct answer</label>
+      <select data-edit-tf>
+        <option value="True" ${canonicalBoolean(q.answer) === 'True' ? 'selected' : ''}>TRUE</option>
+        <option value="False" ${canonicalBoolean(q.answer) === 'False' ? 'selected' : ''}>FALSE</option>
+      </select>
+    </div>
+    <div class="tiny muted" data-editor-help style="margin-top:7px"></div>
+    <div class="bp-editor-actions">
+      <button class="btn btn-primary btn-sm" type="button" data-bank-save-question="${key}">Apply changes</button>
+      <button class="btn btn-ghost btn-sm" type="button" data-bank-cancel-question>Cancel</button>
+      <div class="spacer"></div>
+      <button class="btn btn-danger btn-sm" type="button" data-bank-delete-question="${key}">Delete question</button>
+    </div>
+  </div>`;
+}
+
+function renderSectionEditor(sec, si) {
+  return `<div class="bp-section-editor" data-bank-section-editor="${si}">
+    <div class="field">
+      <label>Part title</label>
+      <input type="text" data-edit-section-title value="${escapeHtml(sec.title || '')}">
+    </div>
+    <div class="field">
+      <label>Directions shown to students</label>
+      <textarea rows="2" data-edit-section-instructions>${escapeHtml(sec.instructions || '')}</textarea>
+    </div>
+    <div class="bp-editor-actions">
+      <button class="btn btn-primary btn-sm" type="button" data-bank-save-section="${si}">Apply changes</button>
+      <button class="btn btn-ghost btn-sm" type="button" data-bank-cancel-section>Cancel</button>
+      <div class="spacer"></div>
+      <button class="btn btn-danger btn-sm" type="button" data-bank-delete-section="${si}">Delete part</button>
+    </div>
+  </div>`;
+}
+
+function renderQuestionCard(q, si, qi) {
+  const key = `${si}:${qi}`;
+  const noKey = q.answer === null || q.answer === undefined || q.answer === '';
+  const answer = answerValues(q.answer).join(' / ');
+  return `<div class="bp-q" data-bank-question="${key}">
+    <div class="bp-q-head">
+      <span class="n">${qi + 1}</span>
+      <select class="bp-kind-select" data-bank-kind="${key}" aria-label="Question ${qi + 1} type">
+        ${bankKindOptions(q.kind)}
+      </select>
+      <span class="bp-points">${Number(q.points || 0)} pt${Number(q.points || 0) === 1 ? '' : 's'}</span>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" type="button" data-bank-edit-question="${key}">Edit</button>
+    </div>
+    <div class="bp-prompt">${escapeHtml(q.prompt || '')}</div>
+    ${renderResponsePreview(q)}
+    <div class="bp-answer ${noKey ? 'no-key' : ''}">
+      <b>${noKey ? '⚠ No key' : '✓ Answer key'}</b>
+      <span>${noKey ? 'This item will need manual grading.' : escapeHtml(answer)}</span>
+    </div>
+    ${state.bankEditing === key ? renderQuestionEditor(q, si, qi) : ''}
+  </div>`;
+}
+
+function renderBankDraft() {
+  const sections = state.bankDraft?.sections || [];
+  const counts = bankCounts(sections);
+  $('#bankCount').textContent = `${counts.sections} parts · ${counts.questions} items · ${counts.points} pts`;
+
+  $('#bankPreview').innerHTML = sections.length ? sections.map((sec, si) => {
+    const secPoints = (sec.questions || []).reduce((n, q) => n + Number(q.points || 0), 0);
+    if (state.bankEditingSection === si) {
+      return `<section class="bp-sec">${renderSectionEditor(sec, si)}</section>`;
+    }
+    return `<section class="bp-sec">
+      <div class="bp-sec-head">
+        <div>
+          <h4>${escapeHtml(sec.title || `Part ${si + 1}`)}</h4>
+          <div class="tiny muted bp-sec-summary">${sec.questions?.length || 0} items · ${secPoints} pts</div>
+        </div>
+        <div class="spacer"></div>
+        <div class="bp-sec-tools">
+          <select data-bank-bulk-kind="${si}" aria-label="Set every question type in ${escapeHtml(sec.title || `Part ${si + 1}`)}">
+            ${bankKindOptions('', true)}
+          </select>
+          <button class="btn btn-ghost btn-sm" type="button" data-bank-edit-section="${si}">Edit part</button>
+        </div>
+      </div>
+      ${sec.instructions ? `<div class="bp-sec-instructions"><b>Directions:</b> ${escapeHtml(sec.instructions)}</div>` : ''}
+      <div class="bp-question-list">
+        ${(sec.questions || []).map((q, qi) => renderQuestionCard(q, si, qi)).join('')}
+      </div>
+      <button class="btn btn-ghost btn-sm bp-add-question" type="button" data-bank-add-question="${si}">+ Add question</button>
+    </section>`;
+  }).join('') : '<div class="feed-empty">Nothing to preview yet. Paste questions above or add a part.</div>';
+
+  wireBankPreview();
+}
+
+function updateBankStatus() {
+  const bar = $('.bank-savebar');
+  if (!bar) return;
+  bar.classList.toggle('is-stale', state.bankTextStale);
+  bar.classList.toggle('is-dirty', state.bankDraftDirty && !state.bankTextStale);
+
+  if (state.bankTextStale) {
+    $('#bankDraftStatus').textContent = 'Pasted text changed — preview it before saving.';
+    $('#bankPasteStatus').textContent = 'New text is waiting to be parsed.';
+  } else if (state.bankDraftDirty) {
+    $('#bankDraftStatus').textContent = 'Unsaved question-bank changes.';
+    $('#bankPasteStatus').textContent = 'Preview ready. Check each type and answer key below.';
+  } else {
+    $('#bankDraftStatus').textContent = 'Preview matches the saved question bank.';
+    $('#bankPasteStatus').textContent = 'The saved bank is shown below.';
+  }
+}
+
+function markBankDraftChanged() {
+  state.bankDraftDirty = true;
+  state.bankTextStale = false;
+  updateBankStatus();
+}
+
+function changeQuestionKind(q, nextKind) {
+  if (!BANK_KIND_SET.has(nextKind)) return;
+  const oldKind = q.kind;
+  const oldAnswer = q.answer;
+  const oldChoices = Array.isArray(q.choices) ? q.choices.slice() : [];
+  q.kind = nextKind;
+
+  if (nextKind === 'short') {
+    q.choices = [];
+    if (oldKind === 'truefalse' && oldAnswer != null) q.answer = canonicalBoolean(oldAnswer).toUpperCase();
+    q.shuffle = false;
+    return;
+  }
+
+  if (nextKind === 'truefalse') {
+    q.choices = ['True', 'False'];
+    q.answer = booleanAnswer(oldAnswer);
+    q.shuffle = false;
+    return;
+  }
+
+  if (nextKind === 'essay') {
+    q.choices = [];
+    q.answer = null;
+    q.shuffle = false;
+    return;
+  }
+
+  // Moving between choice types keeps existing options and keys. Converting a
+  // True/False item gives the editor its two existing labels as a useful start.
+  q.choices = oldChoices.length ? oldChoices : oldKind === 'truefalse' ? ['True', 'False'] : [];
+  q.answer = nextKind === 'multiselect' && oldAnswer != null && !Array.isArray(oldAnswer)
+    ? [oldAnswer]
+    : oldAnswer;
+  if (nextKind === 'mcq' && Array.isArray(q.answer)) q.answer = q.answer[0] ?? null;
+  q.shuffle = true;
+}
+
+function splitEditorLines(value) {
+  return String(value || '')
+    .split(/\r?\n|\s+\|\s+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function syncQuestionEditorFields(editor) {
+  const kind = editor.querySelector('[data-edit-kind]').value;
+  const choiceKind = kind === 'mcq' || kind === 'multiselect';
+  editor.querySelector('[data-edit-choices-wrap]').classList.toggle('hidden', !choiceKind);
+  editor.querySelector('[data-edit-answer-wrap]').classList.toggle('hidden', !(choiceKind || kind === 'short'));
+  editor.querySelector('[data-edit-tf-wrap]').classList.toggle('hidden', kind !== 'truefalse');
+  const help = editor.querySelector('[data-editor-help]');
+  help.textContent = kind === 'short'
+    ? 'Students get a one-line text box. Add alternate accepted spellings on separate lines.'
+    : kind === 'truefalse'
+      ? 'Students choose one of two buttons.'
+      : kind === 'essay'
+        ? 'Students get a long text area and the teacher grades the response manually.'
+        : kind === 'multiselect'
+          ? 'Students may choose several options; list every correct option in the key.'
+          : 'Students choose one option; the key must exactly match one listed choice.';
+}
+
+function saveQuestionEditor(key) {
+  const [si, qi] = key.split(':').map(Number);
+  const q = state.bankDraft?.sections?.[si]?.questions?.[qi];
+  const card = $(`[data-bank-question="${key}"]`);
+  const editor = card?.querySelector('[data-bank-editor]');
+  if (!q || !editor) return;
+
+  const prompt = editor.querySelector('[data-edit-prompt]').value.trim();
+  const points = Number(editor.querySelector('[data-edit-points]').value);
+  const kind = editor.querySelector('[data-edit-kind]').value;
+  if (!prompt) return toast('A question cannot have an empty prompt.', 'bad');
+  if (!Number.isFinite(points) || points <= 0) return toast('Points must be greater than zero.', 'bad');
+
+  const choices = splitEditorLines(editor.querySelector('[data-edit-choices]').value);
+  const enteredAnswers = splitEditorLines(editor.querySelector('[data-edit-answer]').value);
+  let answer = null;
+
+  if (kind === 'mcq' || kind === 'multiselect') {
+    if (choices.length < 2) return toast('Multiple-choice questions need at least two choices.', 'bad');
+    const resolved = [];
+    for (const entered of enteredAnswers) {
+      const match = choices.find((choice) => choice.toLocaleLowerCase() === entered.toLocaleLowerCase());
+      if (!match) return toast(`The answer “${entered}” is not in the choice list.`, 'bad', 5000);
+      if (!resolved.includes(match)) resolved.push(match);
+    }
+    if (kind === 'mcq' && resolved.length > 1) {
+      return toast('Multiple choice accepts one correct answer. Use Multiple select for several.', 'bad', 5000);
+    }
+    answer = kind === 'multiselect' ? (resolved.length ? resolved : null) : (resolved[0] ?? null);
+  } else if (kind === 'short') {
+    answer = enteredAnswers.length > 1 ? enteredAnswers : (enteredAnswers[0] ?? null);
+  } else if (kind === 'truefalse') {
+    answer = editor.querySelector('[data-edit-tf]').value;
+  }
+
+  q.prompt = prompt;
+  q.points = points;
+  q.kind = kind;
+  q.answer = answer;
+  q.choices = kind === 'truefalse' ? ['True', 'False']
+    : kind === 'mcq' || kind === 'multiselect' ? choices : [];
+  q.shuffle = kind === 'mcq' || kind === 'multiselect';
+  delete q._new;
+  delete q._dirtyBeforeAdd;
+  delete q._beforeTypeChange;
+  delete q._dirtyBeforeTypeChange;
+  state.bankEditing = null;
+  markBankDraftChanged();
+  renderBankDraft();
+  toast('Question updated in the preview. Save the bank when you are ready.', 'ok');
+}
+
+function wireBankPreview() {
+  $$('#bankPreview [data-bank-kind]').forEach((select) => {
+    select.addEventListener('change', () => {
+      const [si, qi] = select.dataset.bankKind.split(':').map(Number);
+      const q = state.bankDraft.sections[si].questions[qi];
+      const beforeTypeChange = cloneBank(q);
+      changeQuestionKind(q, select.value);
+      // Choice types need options, so open the details immediately if this was
+      // converted from a text-only item.
+      const needsDetails = (['mcq', 'multiselect'].includes(select.value) && q.choices.length < 2) ||
+        (select.value === 'truefalse' && q.answer == null);
+      if (needsDetails) {
+        q._beforeTypeChange = beforeTypeChange;
+        q._dirtyBeforeTypeChange = state.bankDraftDirty;
+      }
+      state.bankEditing = needsDetails ? `${si}:${qi}` : null;
+      markBankDraftChanged();
+      renderBankDraft();
+    });
+  });
+
+  $$('#bankPreview [data-bank-edit-question]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.bankEditing = button.dataset.bankEditQuestion;
+      state.bankEditingSection = null;
+      renderBankDraft();
+      $(`[data-bank-editor="${state.bankEditing}"]`)?.scrollIntoView?.({ block: 'nearest' });
+    });
+  });
+
+  $$('#bankPreview [data-bank-cancel-question]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const key = button.closest('[data-bank-editor]')?.dataset.bankEditor;
+      if (key) {
+        const [si, qi] = key.split(':').map(Number);
+        const pending = state.bankDraft.sections[si].questions[qi];
+        if (pending?._new) {
+          state.bankDraft.sections[si].questions.splice(qi, 1);
+          state.bankDraftDirty = Boolean(pending._dirtyBeforeAdd);
+          updateBankStatus();
+        } else if (pending?._beforeTypeChange) {
+          state.bankDraft.sections[si].questions[qi] = pending._beforeTypeChange;
+          state.bankDraftDirty = Boolean(pending._dirtyBeforeTypeChange);
+          updateBankStatus();
+        }
+      }
+      state.bankEditing = null;
+      renderBankDraft();
+    });
+  });
+
+  $$('#bankPreview [data-edit-kind]').forEach((select) => {
+    const editor = select.closest('[data-bank-editor]');
+    syncQuestionEditorFields(editor);
+    select.addEventListener('change', () => syncQuestionEditorFields(editor));
+  });
+
+  $$('#bankPreview [data-bank-save-question]').forEach((button) => {
+    button.addEventListener('click', () => saveQuestionEditor(button.dataset.bankSaveQuestion));
+  });
+
+  $$('#bankPreview [data-bank-delete-question]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const [si, qi] = button.dataset.bankDeleteQuestion.split(':').map(Number);
+      if (!confirm(`Delete question ${qi + 1} from this part?`)) return;
+      state.bankDraft.sections[si].questions.splice(qi, 1);
+      state.bankEditing = null;
+      markBankDraftChanged();
+      renderBankDraft();
+    });
+  });
+
+  $$('#bankPreview [data-bank-bulk-kind]').forEach((select) => {
+    select.addEventListener('change', () => {
+      if (!select.value) return;
+      const si = Number(select.dataset.bankBulkKind);
+      const sec = state.bankDraft.sections[si];
+      const label = BANK_KINDS.find(([value]) => value === select.value)?.[1] || select.value;
+      if (!confirm(`Change every item in “${sec.title}” to ${label}?`)) {
+        select.value = '';
+        return;
+      }
+      sec.questions.forEach((q) => changeQuestionKind(q, select.value));
+      markBankDraftChanged();
+      renderBankDraft();
+    });
+  });
+
+  $$('#bankPreview [data-bank-add-question]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const si = Number(button.dataset.bankAddQuestion);
+      const questions = state.bankDraft.sections[si].questions;
+      questions.push({
+        kind: 'short', prompt: '', choices: [], answer: null, points: 1, shuffle: false,
+        _new: true, _dirtyBeforeAdd: state.bankDraftDirty
+      });
+      state.bankEditing = `${si}:${questions.length - 1}`;
+      markBankDraftChanged();
+      renderBankDraft();
+    });
+  });
+
+  $$('#bankPreview [data-bank-edit-section]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.bankEditingSection = Number(button.dataset.bankEditSection);
+      state.bankEditing = null;
+      renderBankDraft();
+    });
+  });
+
+  $$('#bankPreview [data-bank-cancel-section]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const editor = button.closest('[data-bank-section-editor]');
+      const si = Number(editor?.dataset.bankSectionEditor);
+      const sec = state.bankDraft.sections[si];
+      if (sec?._new) {
+        state.bankDraft.sections.splice(si, 1);
+        state.bankDraftDirty = Boolean(sec._dirtyBeforeAdd);
+        updateBankStatus();
+      }
+      state.bankEditingSection = null;
+      renderBankDraft();
+    });
+  });
+
+  $$('#bankPreview [data-bank-save-section]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const si = Number(button.dataset.bankSaveSection);
+      const editor = $(`[data-bank-section-editor="${si}"]`);
+      const title = editor.querySelector('[data-edit-section-title]').value.trim();
+      if (!title) return toast('A part needs a title.', 'bad');
+      state.bankDraft.sections[si].title = title;
+      state.bankDraft.sections[si].instructions = editor.querySelector('[data-edit-section-instructions]').value.trim();
+      delete state.bankDraft.sections[si]._new;
+      delete state.bankDraft.sections[si]._dirtyBeforeAdd;
+      state.bankEditingSection = null;
+      markBankDraftChanged();
+      renderBankDraft();
+    });
+  });
+
+  $$('#bankPreview [data-bank-delete-section]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const si = Number(button.dataset.bankDeleteSection);
+      const sec = state.bankDraft.sections[si];
+      if (!confirm(`Delete “${sec.title}” and its ${sec.questions.length} questions?`)) return;
+      state.bankDraft.sections.splice(si, 1);
+      state.bankEditingSection = null;
+      markBankDraftChanged();
+      renderBankDraft();
+    });
+  });
+}
+
+$('#addBankSection').addEventListener('click', () => {
+  if (!state.bankDraft) {
+    state.bankDraft = { title: state.settings?.exam_title || 'Untitled Exam', sections: [] };
+  }
+  state.bankDraft.sections.push({
+    title: `Part ${state.bankDraft.sections.length + 1}`,
+    instructions: '',
+    questions: [],
+    lock_after: true,
+    _new: true,
+    _dirtyBeforeAdd: state.bankDraftDirty
+  });
+  state.bankEditingSection = state.bankDraft.sections.length - 1;
+  markBankDraftChanged();
+  renderBankDraft();
+});
+
+function validateBankDraft(draft) {
+  if (!draft?.sections?.length) throw new Error('Add at least one part before saving.');
+  let total = 0;
+  draft.sections.forEach((sec, si) => {
+    if (!String(sec.title || '').trim()) throw new Error(`Part ${si + 1} needs a title.`);
+    if (!Array.isArray(sec.questions) || !sec.questions.length) {
+      throw new Error(`${sec.title || `Part ${si + 1}`} has no questions.`);
+    }
+    sec.questions.forEach((q, qi) => {
+      total++;
+      const where = `${sec.title} · question ${qi + 1}`;
+      if (!BANK_KIND_SET.has(q.kind)) throw new Error(`${where} has an unknown type.`);
+      if (!String(q.prompt || '').trim()) throw new Error(`${where} has an empty prompt.`);
+      if (!Number.isFinite(Number(q.points)) || Number(q.points) <= 0) {
+        throw new Error(`${where} must be worth more than zero points.`);
+      }
+      if (q.kind === 'mcq' || q.kind === 'multiselect') {
+        if (!Array.isArray(q.choices) || q.choices.length < 2) {
+          throw new Error(`${where} needs at least two choices.`);
+        }
+        for (const answer of answerValues(q.answer)) {
+          if (!q.choices.some((choice) => choice.toLocaleLowerCase() === answer.toLocaleLowerCase())) {
+            throw new Error(`${where} has an answer key that is not in its choices.`);
+          }
+        }
+      }
+    });
+  });
+  if (!total) throw new Error('Add at least one question before saving.');
 }
 
 /* ------------------------------------------------------------------ start */

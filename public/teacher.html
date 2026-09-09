@@ -74,6 +74,7 @@
       <div class="tabs" role="tablist">
         <button class="tab" role="tab" data-tab="live" aria-selected="true">Live monitor</button>
         <button class="tab" role="tab" data-tab="results" aria-selected="false">Results <span class="count hidden" id="tabManual">0</span></button>
+        <button class="tab" role="tab" data-tab="questions" aria-selected="false">Questions</button>
         <button class="tab" role="tab" data-tab="setup" aria-selected="false">Exam setup</button>
       </div>
 
@@ -187,6 +188,20 @@
 
     <!-- ======================================================== SETUP -->
     <section id="tab-setup" class="hidden">
+
+      <div class="card setup-persistence" id="storageStatus" aria-live="polite">
+        <div class="storage-icon" id="storageIcon">…</div>
+        <div class="grow">
+          <div class="row wrap" style="gap:8px">
+            <b id="storageTitle">Checking data storage…</b>
+            <span class="pill pill-idle" id="setupSaveState">Loading</span>
+          </div>
+          <div class="tiny muted" id="storageDetail" style="margin-top:3px">
+            Exam details and controls save automatically after every change.
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="saveSetupNow" type="button">Save now</button>
+      </div>
 
       <!-- exam manager -->
       <div class="card panel" style="overflow:hidden">
@@ -328,15 +343,21 @@
           </div>
         </div>
       </div>
+    </section>
 
+    <!-- ===================================================== QUESTIONS -->
+    <section id="tab-questions" class="hidden">
       <!-- question bank -->
-      <div class="card panel" style="overflow:hidden;margin-top:18px">
+      <div class="card panel question-bank" style="overflow:hidden">
         <div class="panel-head">
-          <h2>Question bank</h2>
+          <div>
+            <h2>Question bank</h2>
+            <div class="tiny muted" style="margin-top:2px">Paste, preview, and correct every item before students see it.</div>
+          </div>
           <span class="pill pill-idle" id="bankCount">—</span>
           <div class="spacer"></div>
-          <button class="btn btn-ghost btn-sm" id="loadSampleText">Show format</button>
-          <button class="btn btn-ghost btn-sm" id="loadCurrent">Load current bank</button>
+          <button class="btn btn-ghost btn-sm" id="loadSampleText" type="button">Show paste format</button>
+          <button class="btn btn-ghost btn-sm" id="loadCurrent" type="button">Reload saved bank</button>
         </div>
         <div class="card-pad">
           <div class="help-block" id="formatHelp" style="display:none">
@@ -344,24 +365,52 @@
             <div class="tiny muted" style="margin-top:4px">
               Paste your whole exam below. Each <span class="mono">#</span> line starts a new part,
               numbered lines are items, <span class="mono">*</span> marks the correct choice,
-              <span class="mono">[n]</span> sets the points.
+              <span class="mono">[n]</span> sets the points, and <span class="mono">(short)</span>
+              forces a typed short answer.
             </div>
             <pre id="formatSample"></pre>
           </div>
 
-          <div class="field" style="margin-top:14px">
-            <label for="bankText">Exam text (or paste JSON / CSV)</label>
-            <textarea id="bankText" rows="16" spellcheck="false" style="font-family:var(--mono);font-size:13px"></textarea>
+          <div class="bank-step">
+            <div class="bank-step-head">
+              <span class="bank-step-num">1</span>
+              <div>
+                <h3>Paste question text</h3>
+                <div class="tiny muted">Plain text, JSON, and CSV are accepted. Numbering may use “1.” or “1)” with or without a space.</div>
+              </div>
+            </div>
+            <div class="field" style="margin-top:12px">
+              <label for="bankText">Exam text</label>
+              <textarea id="bankText" rows="14" spellcheck="false" style="font-family:var(--mono);font-size:13px"></textarea>
+            </div>
+            <div class="row wrap">
+              <button class="btn btn-soft" id="previewBank" type="button">Preview pasted questions</button>
+              <span class="tiny muted" id="bankPasteStatus">The saved bank is shown below.</span>
+            </div>
           </div>
 
-          <div class="row wrap">
-            <button class="btn btn-ghost" id="previewBank">Preview</button>
-            <button class="btn btn-primary" id="importBank">Import &amp; replace question bank</button>
-            <span class="tiny muted">Importing replaces the current bank. Existing student attempts keep the paper they started with.</span>
+          <div id="bankWarnings" aria-live="polite"></div>
+
+          <div class="bank-review-head">
+            <div class="bank-step-head">
+              <span class="bank-step-num">2</span>
+              <div>
+                <h3>Teacher preview &amp; editor</h3>
+                <div class="tiny muted">This is how each response control will appear. Change a type directly or choose Edit for the prompt, key, choices, and points.</div>
+              </div>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="addBankSection" type="button">+ Add part</button>
           </div>
 
-          <div id="bankWarnings"></div>
-          <div class="bank-preview" id="bankPreview" style="margin-top:14px"></div>
+          <div class="bank-preview" id="bankPreview" aria-live="polite"></div>
+
+          <div class="bank-savebar">
+            <div>
+              <div class="small" id="bankDraftStatus">No unsaved changes.</div>
+              <div class="tiny muted">Saving replaces the selected exam’s question bank. Check every type and answer key first.</div>
+            </div>
+            <button class="btn btn-primary" id="importBank" type="button">Save question bank</button>
+          </div>
         </div>
       </div>
     </section>

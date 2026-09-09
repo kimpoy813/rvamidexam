@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 import {
   db, getSettings, setSettings, ensureTeacher, verifyTeacher, makeAccessCode,
-  getExamBlueprint, replaceExam, now, ensureExamExists, getCurrentExamId, listExams
+  getExamBlueprint, replaceExam, now, ensureExamExists, getCurrentExamId, listExams,
+  checkpointDatabase, getStorageInfo
 } from './lib/db.js';
 import { createRouter, sendJson, serveStatic, HttpError } from './lib/http.js';
 import { registerStudentRoutes } from './routes/student.js';
@@ -121,6 +122,9 @@ server.listen(PORT, HOST, () => {
   console.log(`  Access code  ${s.access_code}`);
   console.log(`  Duration     ${s.duration_minutes} minutes`);
   console.log(`  Question bank ${counts.sections} sections · ${counts.questions} items · ${counts.points} pts`);
+  const storage = getStorageInfo();
+  console.log(`  Storage      ${storage.durable ? 'persistent' : 'EPHEMERAL — SETUP WILL RESET'} (${storage.mode})`);
+  if (storage.warning) console.warn(`  WARNING      ${storage.warning}`);
   if (creds.defaultPasswordActive) {
     console.log(`  Teacher      ${creds.username} / ${creds.password}${creds.generated ? '  (default — change it in the dashboard)' : ''}`);
   } else {
@@ -131,8 +135,40 @@ server.listen(PORT, HOST, () => {
 
 export const httpServer = server;
 
-process.on('SIGINT', () => {
-  console.log('\n[exam] shutting down');
+let shuttingDown = false;
+let shutdownFinished = false;
+function finishShutdown() {
+  if (shutdownFinished) return;
+  shutdownFinished = true;
+  try { checkpointDatabase(); } catch { /* best effort */ }
   try { db.close(); } catch { /* already closed */ }
   process.exit(0);
-});
+}
+
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n[exam] ${signal} received — saving and shutting down`);
+  clearInterval(sweeper);
+  // Render sends SIGTERM for sleeps/restarts. Stop accepting new work and end
+  // long-lived SSE streams, but let an in-flight autosave finish before SQLite
+  // is checkpointed and closed.
+  hub.close();
+  try {
+    server.close(finishShutdown);
+    server.closeIdleConnections?.();
+  } catch {
+    finishShutdown();
+    return;
+  }
+
+  // Do not let a broken client hold deployment shutdown open indefinitely.
+  const force = setTimeout(() => {
+    try { server.closeAllConnections?.(); } catch { /* best effort */ }
+    finishShutdown();
+  }, 5000);
+  force.unref?.();
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
