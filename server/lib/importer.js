@@ -28,6 +28,11 @@
 
 const LETTER_CHOICE = /^\s*([A-J])\s*[.)]\s*(.+)$/i;
 const BULLET_CHOICE = /^\s*[-*•]\s+(.+)$/;
+// Later options on the same line as an earlier one, as produced by copying a
+// PDF: "A. Melting of ice    B. Rusting of iron". Two spaces or a tab are
+// required before the marker so prose such as "the value of x. B. is 5" is not
+// chopped into choices.
+const INLINE_CHOICES = /(?:\s{2,}|\t)([A-J])\s*[.)]\s+/g;
 const ITEM_START = /^\s*(\d+)\s*[.)]\s+(.*)$/;
 const ANSWER_LINE = /^\s*(?:ans|answer|key)\s*:?\s*(.+)$/i;
 // Not end-anchored: the documented form is "3. Prompt [3] (multi)", where the
@@ -248,6 +253,31 @@ export function parseExamText(text, fallbackTitle = 'Imported Exam') {
     }
 
     // ---- choices
+    // Copying out of a PDF usually collapses every option onto one line:
+    //   A. Melting of ice    B. Rusting of iron    C. Dissolving sugar
+    // Split on the later markers before falling through to the single-choice
+    // case. Two spaces (or a tab) are required before a marker so that prose
+    // like "The value of x. B. is 5" is not chopped into choices.
+    if (item && LETTER_CHOICE.test(line) && line.match(INLINE_CHOICES)) {
+      // Drop the leading marker first; INLINE_CHOICES only matches the later
+      // ones, since it keys off the whitespace that separates them.
+      const parts = line
+        .replace(LETTER_CHOICE, '$2')
+        .replace(INLINE_CHOICES, '\u0000')
+        .split('\u0000')
+        .map((part) => part.trim())
+        .filter(Boolean);
+      for (let raw of parts) {
+        raw = raw.trim();
+        const starred = /\*\s*$/.test(raw);
+        if (starred) raw = raw.replace(/\*\s*$/, '').trim();
+        if (!raw) continue;
+        item.choices.push(raw);
+        if (starred) item.starred.push(item.choices.length - 1);
+      }
+      continue;
+    }
+
     const letterMatch = line.match(LETTER_CHOICE);
     const bulletMatch = line.match(BULLET_CHOICE);
     if (item && (letterMatch || bulletMatch)) {

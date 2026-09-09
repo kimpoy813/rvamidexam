@@ -691,6 +691,64 @@ B. 7 *
   }
 });
 
+test('choices collapsed onto one line are split apart', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  // Copying a paper out of a PDF usually puts every option on a single line.
+  const parsed = parseExamText(`# Part I. Multiple Choice
+1. Which of the following is a chemical change?
+A. Melting of ice    B. Rusting of iron    C. Dissolving sugar    D. Breaking glass
+2. What is the smallest unit of an element?
+A. Molecule    B. Atom    C. Compound    D. Ion
+
+ANSWER KEY
+1. B    2. B
+`);
+  const qs = parsed.sections[0].questions;
+
+  assert.deepEqual(qs[0].choices, ['Melting of ice', 'Rusting of iron', 'Dissolving sugar', 'Breaking glass']);
+  assert.deepEqual(qs[1].choices, ['Molecule', 'Atom', 'Compound', 'Ion']);
+  assert.equal(qs[0].answer, 'Rusting of iron');
+  assert.equal(qs[1].answer, 'Atom');
+  for (const q of qs) {
+    for (const c of q.choices) {
+      assert.ok(!/^[A-J]\s*[.)]/.test(c), `choice "${c}" still carries its letter marker`);
+    }
+  }
+});
+
+test('one-line choices honour a star and a tab separator', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  const starred = parseExamText(`# Part I. Multiple Choice
+1. Which of the following is a chemical change?
+A. Melting of ice    B. Rusting of iron *    C. Dissolving sugar
+`);
+  assert.equal(starred.sections[0].questions[0].answer, 'Rusting of iron');
+
+  const tabbed = parseExamText(`# Part I. Multiple Choice
+1. Pick one.
+A) alpha\tB) beta *\tC) gamma
+`);
+  const q = tabbed.sections[0].questions[0];
+  assert.deepEqual(q.choices, ['alpha', 'beta', 'gamma']);
+  assert.equal(q.answer, 'beta');
+});
+
+test('prose is not chopped into choices', async () => {
+  const { parseExamText } = await import('../server/lib/importer.js');
+  // A single space before a letter marker must not start a new choice, or any
+  // sentence containing "x. B." would be shredded.
+  const parsed = parseExamText(`# Part I. Identification
+1. The value of x. B. is 5 and it matters.
+Ans: five
+`);
+  const q = parsed.sections[0].questions[0];
+
+  assert.equal(q.kind, 'short');
+  assert.deepEqual(q.choices, []);
+  assert.equal(q.answer, 'five');
+  assert.equal(q.prompt, 'The value of x. B. is 5 and it matters.');
+});
+
 test('the teacher API refuses anonymous callers', async () => {
   const { status } = await call('GET', '/api/teacher/roster');
   assert.equal(status, 401);
