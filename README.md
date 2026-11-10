@@ -401,11 +401,27 @@ the build/start commands above. The port is injected by Render via `PORT`.
 
 ### Keeping your data (and your changed password)
 
-Everything — exams, question banks, student attempts and the **teacher
-password** — is stored in `data/exam.sqlite`. Render's default filesystem is
-**ephemeral**: every deploy or restart wipes it, which is why a changed teacher
-password can appear to "reset" back to the default. To keep the data across
-deploys you must attach a **persistent disk** (this requires a paid plan):
+Render's default filesystem is **ephemeral**: every deploy or restart wipes local
+files. You can keep exams, question banks, teacher accounts, and student attempts
+permanently using **Supabase** (works on Render's **Free** plan) or a **Render
+Persistent Disk** (requires Render's paid Starter plan):
+
+#### Option A: Supabase storage (Render Free plan supported)
+
+1. Run `supabase/schema.sql` once in your Supabase project's **SQL Editor** (creates
+   `teachers`, `teacher_tokens`, `exams`, `settings`, `sections`, `questions`,
+   `sessions`, and `events` with Row Level Security enabled).
+2. In your Render service → **Environment**, add:
+   - `SUPABASE_URL` = `https://<project-ref>.supabase.co`
+   - `SUPABASE_SERVICE_ROLE_KEY` = your Supabase `service_role` / `sb_secret_...` key
+     *(from Supabase Dashboard → Project Settings → API; never use the public
+     `anon` / `publishable` key)*
+   *(Alternatively, set `DATABASE_URL` or `SUPABASE_DB_URL` to your Supabase
+   IPv4 Session/Transaction Pooler connection string.)*
+3. Redeploy and open `/teacher` → **Exam setup** to confirm **Supabase storage
+   connected** appears.
+
+#### Option B: Render Persistent Disk (paid Starter plan)
 
 1. In the Render dashboard, open your service → **Disks** → **Add disk**.
 2. Set the mount path to `/opt/render/project/src/data`.
@@ -455,10 +471,13 @@ remain necessary to retain accounts and data.
 | --- | --- | --- |
 | `PORT` | `4000` | listen port |
 | `HOST` | `0.0.0.0` | bind address |
-| `EXAM_DATA_DIR` | `./data` | where the database lives (point this at a persistent disk on Render) |
-| `EXAM_DB` | `$EXAM_DATA_DIR/exam.sqlite` | database path |
-| `EXAM_STORAGE_MODE` | _(local disk)_ | set to `persistent` when the hosted data path is an attached durable disk |
-| `EXAM_ALLOW_EPHEMERAL` | _(unset)_ | set to `true` to allow disposable Render deployments without a disk (data can be lost) |
+| `SUPABASE_URL` | _(unset)_ | Supabase project URL (`https://<ref>.supabase.co`) for durable cloud storage |
+| `SUPABASE_SERVICE_ROLE_KEY` | _(unset)_ | Supabase `service_role` or `sb_secret_...` key (paired with `SUPABASE_URL`) |
+| `DATABASE_URL` / `SUPABASE_DB_URL` | _(unset)_ | PostgreSQL connection string (alternative to `SUPABASE_URL` + key) |
+| `EXAM_DATA_DIR` | `./data` | where the local SQLite database lives (point this at a persistent disk on Render if not using Supabase) |
+| `EXAM_DB` | `$EXAM_DATA_DIR/exam.sqlite` | local SQLite database path |
+| `EXAM_STORAGE_MODE` | _(local disk)_ | set to `persistent` when `EXAM_DATA_DIR` is an attached durable disk |
+| `EXAM_ALLOW_EPHEMERAL` | _(unset)_ | set to `true` to allow disposable Render deployments without Supabase or a disk |
 | `EXAM_TEACHER_USER` | `teacher` | teacher username |
 | `EXAM_TEACHER_PASSWORD` | `rvm-exam-2026` | teacher password used at first boot only |
 

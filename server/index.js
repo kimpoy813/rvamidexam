@@ -9,7 +9,9 @@ import { fileURLToPath } from 'node:url';
 import {
   db, getSettings, setSettings, ensureTeacher, makeAccessCode,
   getExamBlueprint, replaceExam, now, ensureExamExists, getCurrentExamId, listExams,
-  checkpointDatabase, getStorageInfo, teacherContext, teacherFromToken
+  checkpointDatabase, getStorageInfo, teacherContext, teacherFromToken,
+  assignUnownedExams, initRemoteStorage, flushRemoteStorage, closeRemoteStorage,
+  isRemoteStorageEnabled, hasUrgentRemoteSync
 } from './lib/db.js';
 import { createRouter, sendJson, serveStatic, HttpError } from './lib/http.js';
 import { registerStudentRoutes } from './routes/student.js';
@@ -34,7 +36,7 @@ function bootstrap() {
     && db.prepare("SELECT COUNT(*) AS n FROM settings WHERE key NOT IN ('storage_id', 'current_exam_id')").get().n === 0;
   const examId = ensureExamExists();
   // Existing installations belonged to the original account.
-  db.prepare("UPDATE exams SET teacher_id = ? WHERE teacher_id IS NULL").run(initialTeacher.id);
+  assignUnownedExams(initialTeacher.id);
   if (fresh) {
     replaceExam(SAMPLE_EXAM, examId);
     console.log('[exam] No question bank found — loaded the sample exam.');
@@ -43,7 +45,9 @@ function bootstrap() {
   return { username };
 }
 
+await initRemoteStorage();
 const creds = bootstrap();
+await flushRemoteStorage({ includeHeartbeats: true });
 
 /* ---------------------------------------------------------------- router */
 
@@ -67,6 +71,9 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (url.pathname.startsWith('/api/')) {
+      if (isRemoteStorageEnabled()) {
+        res._beforeSend = () => (hasUrgentRemoteSync() ? flushRemoteStorage() : null);
+      }
       const token = req.headers['x-teacher-token'] || req.query?.t || '';
       const teacher = url.pathname.startsWith('/api/teacher/') ? teacherFromToken(String(token)) : null;
       const handled = await teacherContext.run({ teacherId: teacher?.id || null }, () => router.handle(req, res, url));
@@ -98,7 +105,10 @@ server.on('clientError', (err, socket) => {
 /* ------------------------------------------------------- deadline sweeper */
 
 const sweeper = setInterval(() => {
-  if (enforceDeadlines()) broadcastRoster(true);
+  if (enforceDeadlines()) {
+    flushRemoteStorage().catch((err) => console.error('[exam] deadline sync failed:', err.message));
+    broadcastRoster(true);
+  }
 }, 5000);
 sweeper.unref?.();
 
@@ -135,9 +145,13 @@ export const httpServer = server;
 
 let shuttingDown = false;
 let shutdownFinished = false;
-function finishShutdown() {
+async function finishShutdown() {
   if (shutdownFinished) return;
   shutdownFinished = true;
+  try { await flushRemoteStorage({ includeHeartbeats: true }); } catch (err) {
+    console.error('[exam] shutdown sync failed:', err.message);
+  }
+  try { await closeRemoteStorage(); } catch { /* best effort */ }
   try { checkpointDatabase(); } catch { /* best effort */ }
   try { db.close(); } catch { /* already closed */ }
   process.exit(0);

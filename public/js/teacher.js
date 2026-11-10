@@ -885,16 +885,28 @@ async function loadStorage() {
     card.classList.toggle('warn', !info.durable && !storageWasReplaced);
     card.classList.toggle('bad', storageWasReplaced);
     $('#storageIcon').textContent = storageWasReplaced ? '!' : (info.durable ? '✓' : '!');
+    const durableTitle = info.mode === 'supabase'
+      ? 'Supabase storage connected'
+      : info.mode === 'postgres'
+        ? 'PostgreSQL storage connected'
+        : info.mode === 'persistent-disk'
+          ? 'Persistent storage connected'
+          : 'Setup stored on this computer';
+    const durableDetail = info.mode === 'supabase'
+      ? 'Exams, question banks, teacher accounts, and student attempts are saved to Supabase PostgreSQL and survive Render restarts and redeploys.'
+      : info.mode === 'postgres'
+        ? 'Exams, question banks, teacher accounts, and student attempts are saved to PostgreSQL and survive service restarts and redeploys.'
+        : info.mode === 'persistent-disk'
+          ? 'Changes are written to the attached data disk and survive service restarts and redeploys.'
+          : 'Exam details and controls save automatically to SQLite and remain after reopening the system.';
     $('#storageTitle').textContent = storageWasReplaced
       ? 'The database was replaced since your last visit'
       : info.durable
-        ? (info.mode === 'persistent-disk' ? 'Persistent storage connected' : 'Setup stored on this computer')
+        ? durableTitle
         : 'Storage is temporary — setup can reset';
     $('#storageDetail').textContent = storageWasReplaced
-      ? 'This usually means the host restarted without an attached persistent disk. Save the setup again and fix the storage configuration before the exam.'
-      : info.warning || (info.mode === 'persistent-disk'
-        ? 'Changes are written to the attached data disk and survive service restarts and redeploys.'
-        : 'Exam details and controls save automatically to SQLite and remain after reopening the system.');
+      ? 'This usually means the host restarted without durable storage. Save the setup again and check your Supabase or persistent-disk configuration before the exam.'
+      : info.warning || durableDetail;
   } catch (err) {
     card.classList.add('warn');
     $('#storageIcon').textContent = '?';

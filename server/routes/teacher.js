@@ -8,8 +8,10 @@ import {
   verifyTeacher, issueTeacherToken, teacherFromToken, revokeTeacherToken, getSession,
   listSessions, updateSession, logEvent, now, eventsFor, getExamBlueprint, replaceExam,
   deleteSessionsExceptKeep, getQuestions, getSections, ensureTeacher,
+  teacherUsernameExists, updateTeacherPassword, discardUnpersistedRegistration,
+  isRemoteStorageEnabled, flushRemoteStorage,
   listExams, createExam, deleteExam, duplicateExam, findExamByCode, getExam,
-  getStorageInfo, checkpointDatabase, teacherContext, db
+  getStorageInfo, checkpointDatabase, teacherContext
 } from '../lib/db.js';
 import { buildPaper, gradePaper, itemAnalysis, toCsv, normalizeAnswer } from '../lib/exam.js';
 import { HttpError, sendJson, sendText, readJsonBody, readTextBody } from '../lib/http.js';
@@ -41,10 +43,21 @@ export function registerTeacherRoutes(router, { requireAuth }) {
     const password = String(body.password || '');
     if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(username)) throw new HttpError(400, 'Username must be 3–40 letters, numbers, dots, dashes or underscores.');
     if (password.length < 10 || password.length > 200) throw new HttpError(400, 'Password must be 10–200 characters.');
-    if (db.prepare('SELECT 1 FROM teachers WHERE username = ? COLLATE NOCASE').get(username)) throw new HttpError(409, 'That username is already in use.');
+    if (teacherUsernameExists(username)) throw new HttpError(409, 'That username is already in use.');
     const teacher = ensureTeacher(username, password);
-    teacherContext.run({ teacherId: teacher.id }, () => createExam({ title: 'Untitled Exam', settings: { exam_open: '0' } }));
+    const createdExam = teacherContext.run({ teacherId: teacher.id }, () =>
+      createExam({ title: 'Untitled Exam', settings: { exam_open: '0' } })
+    );
     const token = issueTeacherToken(teacher.id);
+    if (isRemoteStorageEnabled()) {
+      try {
+        await flushRemoteStorage();
+      } catch (err) {
+        discardUnpersistedRegistration({ teacherId: teacher.id, examId: createdExam?.id, token });
+        console.error('[exam] remote storage sync failed during registration:', err.message || err);
+        throw new HttpError(503, 'Database storage could not save changes. Please retry.');
+      }
+    }
     sendJson(res, 201, { token, teacher: { username: teacher.username } });
   });
 
@@ -87,10 +100,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
     const next = String(body.next || '');
     if (!verifyTeacher(teacher.username, current)) throw new HttpError(401, 'Current password is wrong.');
     if (next.length < 6) throw new HttpError(400, 'New password must be at least 6 characters.');
-    const { hashPassword } = await import('../lib/db.js');
-    const { hash, salt } = hashPassword(next);
-    const { db } = await import('../lib/db.js');
-    db.prepare('UPDATE teachers SET pass_hash = ?, salt = ? WHERE id = ?').run(hash, salt, teacher.id);
+    updateTeacherPassword(teacher.id, next);
     sendJson(res, 200, { ok: true });
   });
 

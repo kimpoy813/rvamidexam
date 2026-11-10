@@ -1,9 +1,10 @@
 /**
  * Persistence layer.
  *
- * Uses the SQLite engine that ships with Node 22 (`node:sqlite`) so the app has
- * zero external runtime dependencies. Everything a teacher needs later
- * (responses, scores, integrity events) lives in one file: data/exam.sqlite.
+ * Uses Node 22's built-in SQLite (`node:sqlite`) for fast synchronous in-process
+ * reads/writes, and — when `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (or
+ * `DATABASE_URL` / `SUPABASE_DB_URL`) is configured — hydrates from Supabase /
+ * PostgreSQL on boot and durably syncs relational changes back to Supabase.
  *
  * Multiple exams are supported. Each exam owns its question bank, its own
  * settings (title, duration, access code, …) and its own roster of attempts.
@@ -12,26 +13,36 @@
  */
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { fileURLToPath } from 'node:url';
+import { resolveRemoteConfig, createConfiguredRemoteStore } from './remote-store.js';
+
 export const teacherContext = new AsyncLocalStorage();
 export const currentTeacherId = () => teacherContext.getStore()?.teacherId || null;
-import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(__dirname, '..', '..');
-export const DATA_DIR = process.env.EXAM_DATA_DIR || path.join(ROOT, 'data');
 
+const initialRemoteConfig = resolveRemoteConfig(process.env);
+const defaultCacheDir = initialRemoteConfig
+  ? fs.mkdtempSync(path.join(os.tmpdir(), 'rvam-supabase-cache-'))
+  : path.join(ROOT, 'data');
+
+export const DATA_DIR = process.env.EXAM_DATA_DIR || defaultCacheDir;
 export const DB_PATH = process.env.EXAM_DB || path.join(DATA_DIR, 'exam.sqlite');
 
 // On Render, never silently initialize a new database on an ephemeral root
-// filesystem when durable storage was expected. An explicit opt-in exists for
-// disposable demos only; it cannot provide persistence.
-if (process.env.RENDER === 'true' || process.env.RENDER_SERVICE_ID) {
+// filesystem when durable storage was expected. Configuring Supabase / Postgres
+// satisfies durability without requiring a paid Render persistent disk.
+if ((process.env.RENDER === 'true' || process.env.RENDER_SERVICE_ID) && !initialRemoteConfig) {
   if (process.env.EXAM_STORAGE_MODE !== 'persistent') {
     if (process.env.EXAM_ALLOW_EPHEMERAL !== 'true') {
-      throw new Error('Render requires a persistent disk. Set EXAM_DATA_DIR and EXAM_STORAGE_MODE=persistent, or EXAM_ALLOW_EPHEMERAL=true for a disposable demo.');
+      throw new Error(
+        'Render requires durable storage: configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or DATABASE_URL), attach a persistent disk with EXAM_DATA_DIR and EXAM_STORAGE_MODE=persistent, or set EXAM_ALLOW_EPHEMERAL=true for a disposable demo.'
+      );
     }
   } else {
     const dataPath = path.resolve(DATA_DIR);
@@ -182,11 +193,469 @@ CREATE INDEX IF NOT EXISTS idx_sessions_exam ON sessions(exam_id, status);
 
 // A stable ID lets the dashboard distinguish a normal browser reopen from a
 // hosting provider replacing the database with a fresh ephemeral filesystem.
-// It lives in SQLite, so it follows the same persistence guarantees as exams.
 const storageIdRow = db.prepare("SELECT value FROM settings WHERE key = 'storage_id'").get();
 if (!storageIdRow) {
   db.prepare("INSERT INTO settings(key, value) VALUES('storage_id', ?)")
     .run(crypto.randomBytes(16).toString('hex'));
+}
+
+/* ------------------------------------------------- remote sync coordinator */
+
+const SESSION_COLUMNS = `token, exam_id, access_code, student_name, student_no, class_section,
+  status, created_at, started_at, deadline, last_seen, order_seed, answers,
+  section_index, max_section, cursor, reloads, ip, user_agent, submitted_at, score,
+  max_score, pending_manual, violations, flagged, manual_notes, manual_scores`;
+
+let remoteStore = null;
+let remoteEnabled = false;
+let lastSyncedEventId = 0;
+let activeFlush = null;
+let heartbeatTimer = null;
+
+const dirtyTeachers = new Set();
+const dirtyTokens = new Set();
+const deletedTokens = new Set();
+const dirtyExams = new Set();
+const deletedExams = new Set();
+const dirtySettings = new Set();
+const deletedSettings = new Set();
+const replacedExamBanks = new Set();
+const dirtySessions = new Set();
+const heartbeatSessions = new Set();
+const deletedSessionExams = new Set();
+const deletedEventTokens = new Set();
+let sessionsClearedAll = false;
+let pendingEventSync = false;
+
+function scheduleHeartbeatFlush() {
+  if (!remoteEnabled || heartbeatTimer) return;
+  heartbeatTimer = setTimeout(() => {
+    heartbeatTimer = null;
+    flushRemoteStorage({ includeHeartbeats: true }).catch((err) => {
+      console.error('[exam] background heartbeat sync failed:', err.message);
+    });
+  }, 5000);
+  heartbeatTimer.unref?.();
+}
+
+function markTeacherDirty(id) {
+  if (remoteEnabled && id != null) dirtyTeachers.add(Number(id));
+}
+
+function markTokenDirty(token) {
+  if (!remoteEnabled || !token) return;
+  deletedTokens.delete(token);
+  dirtyTokens.add(token);
+}
+
+function markTokenDeleted(token) {
+  if (!remoteEnabled || !token) return;
+  dirtyTokens.delete(token);
+  deletedTokens.add(token);
+}
+
+function markExamDirty(id) {
+  if (!remoteEnabled || !id) return;
+  deletedExams.delete(id);
+  dirtyExams.add(id);
+}
+
+function markExamBankReplaced(id) {
+  if (!remoteEnabled || !id) return;
+  replacedExamBanks.add(id);
+}
+
+function markExamDeleted(id, sessionTokens = []) {
+  if (!remoteEnabled || !id) return;
+  dirtyExams.delete(id);
+  replacedExamBanks.delete(id);
+  deletedExams.add(id);
+  deletedSessionExams.add(id);
+  for (const tok of sessionTokens) {
+    dirtySessions.delete(tok);
+    heartbeatSessions.delete(tok);
+    deletedEventTokens.add(tok);
+  }
+}
+
+function markSettingDirty(key) {
+  if (!remoteEnabled || !key) return;
+  deletedSettings.delete(key);
+  dirtySettings.add(key);
+}
+
+function markSettingDeleted(key) {
+  if (!remoteEnabled || !key) return;
+  dirtySettings.delete(key);
+  deletedSettings.add(key);
+}
+
+function markSessionDirty(token, { urgent = true } = {}) {
+  if (!remoteEnabled || !token) return;
+  if (urgent) {
+    heartbeatSessions.delete(token);
+    dirtySessions.add(token);
+  } else if (!dirtySessions.has(token)) {
+    heartbeatSessions.add(token);
+    scheduleHeartbeatFlush();
+  }
+}
+
+function markExamSessionsCleared(examId, sessionTokens = []) {
+  if (!remoteEnabled || !examId) return;
+  deletedSessionExams.add(examId);
+  for (const tok of sessionTokens) {
+    dirtySessions.delete(tok);
+    heartbeatSessions.delete(tok);
+    deletedEventTokens.add(tok);
+  }
+}
+
+function markAllSessionsCleared() {
+  if (!remoteEnabled) return;
+  sessionsClearedAll = true;
+  deletedSessionExams.clear();
+  deletedEventTokens.clear();
+  dirtySessions.clear();
+  heartbeatSessions.clear();
+}
+
+export function isRemoteStorageEnabled() {
+  return remoteEnabled;
+}
+
+export function hasUrgentRemoteSync() {
+  if (!remoteEnabled) return false;
+  return Boolean(
+    dirtyTeachers.size ||
+    dirtyTokens.size ||
+    deletedTokens.size ||
+    dirtyExams.size ||
+    deletedExams.size ||
+    dirtySettings.size ||
+    deletedSettings.size ||
+    replacedExamBanks.size ||
+    dirtySessions.size ||
+    deletedSessionExams.size ||
+    deletedEventTokens.size ||
+    sessionsClearedAll ||
+    pendingEventSync
+  );
+}
+
+function hydrateLocalSqlite(dataset) {
+  const localStorageId =
+    db.prepare("SELECT value FROM settings WHERE key = 'storage_id'").get()?.value ||
+    crypto.randomBytes(16).toString('hex');
+  const remoteHasStorageId = (dataset.settings || []).some((s) => s.key === 'storage_id');
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      DELETE FROM questions;
+      DELETE FROM sections;
+      DELETE FROM events;
+      DELETE FROM sessions;
+      DELETE FROM exams;
+      DELETE FROM teacher_tokens;
+      DELETE FROM teachers;
+      DELETE FROM settings;
+    `);
+
+    const insTeacher = db.prepare(
+      'INSERT INTO teachers(id, username, pass_hash, salt, created_at) VALUES(?,?,?,?,?)'
+    );
+    for (const t of dataset.teachers || []) {
+      insTeacher.run(t.id, t.username, t.pass_hash, t.salt, t.created_at);
+    }
+
+    const insToken = db.prepare(
+      'INSERT INTO teacher_tokens(token, teacher_id, created_at) VALUES(?,?,?)'
+    );
+    for (const tk of dataset.teacher_tokens || []) {
+      insToken.run(tk.token, tk.teacher_id, tk.created_at);
+    }
+
+    const insExam = db.prepare(
+      'INSERT INTO exams(id, title, access_code, settings, created_at, teacher_id) VALUES(?,?,?,?,?,?)'
+    );
+    for (const ex of dataset.exams || []) {
+      insExam.run(ex.id, ex.title, ex.access_code, ex.settings, ex.created_at, ex.teacher_id);
+    }
+
+    const insSetting = db.prepare('INSERT INTO settings(key, value) VALUES(?,?)');
+    for (const st of dataset.settings || []) {
+      insSetting.run(st.key, st.value);
+    }
+    if (!remoteHasStorageId) {
+      insSetting.run('storage_id', localStorageId);
+    }
+
+    const insSection = db.prepare(
+      'INSERT INTO sections(id, exam_id, ord, title, instructions, lock_after, minutes) VALUES(?,?,?,?,?,?,?)'
+    );
+    for (const sec of dataset.sections || []) {
+      insSection.run(sec.id, sec.exam_id, sec.ord, sec.title, sec.instructions, sec.lock_after, sec.minutes);
+    }
+
+    const insQuestion = db.prepare(
+      'INSERT INTO questions(id, section_id, ord, kind, prompt, choices, answer, points, shuffle, tags) VALUES(?,?,?,?,?,?,?,?,?,?)'
+    );
+    for (const q of dataset.questions || []) {
+      insQuestion.run(q.id, q.section_id, q.ord, q.kind, q.prompt, q.choices, q.answer, q.points, q.shuffle, q.tags);
+    }
+
+    const insSession = db.prepare(
+      `INSERT INTO sessions(${SESSION_COLUMNS})
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    );
+    for (const s of dataset.sessions || []) {
+      insSession.run(
+        s.token, s.exam_id, s.access_code, s.student_name, s.student_no, s.class_section,
+        s.status, s.created_at, s.started_at, s.deadline, s.last_seen, s.order_seed, s.answers,
+        s.section_index, s.max_section, s.cursor, s.reloads, s.ip, s.user_agent, s.submitted_at,
+        s.score, s.max_score, s.pending_manual, s.violations, s.flagged, s.manual_notes, s.manual_scores
+      );
+    }
+
+    const insEvent = db.prepare('INSERT INTO events(id, token, at, type, detail) VALUES(?,?,?,?,?)');
+    for (const ev of dataset.events || []) {
+      insEvent.run(ev.id, ev.token, ev.at, ev.type, ev.detail);
+    }
+
+    db.exec('COMMIT');
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+
+  dirtyTeachers.clear();
+  dirtyTokens.clear();
+  deletedTokens.clear();
+  dirtyExams.clear();
+  deletedExams.clear();
+  dirtySettings.clear();
+  deletedSettings.clear();
+  replacedExamBanks.clear();
+  dirtySessions.clear();
+  heartbeatSessions.clear();
+  deletedSessionExams.clear();
+  deletedEventTokens.clear();
+  sessionsClearedAll = false;
+  pendingEventSync = false;
+  lastSyncedEventId = (dataset.events || []).reduce((max, ev) => Math.max(max, Number(ev.id) || 0), 0);
+
+  if (!remoteHasStorageId) {
+    dirtySettings.add('storage_id');
+  }
+}
+
+export async function initRemoteStorage(customStore = null) {
+  const store = customStore || createConfiguredRemoteStore(process.env);
+  if (!store) return false;
+  const dataset = await store.init();
+  remoteStore = store;
+  hydrateLocalSqlite(dataset);
+  remoteEnabled = true;
+  return true;
+}
+
+function drainBatchSnapshot({ includeHeartbeats = false } = {}) {
+  const teacherIds = [...dirtyTeachers];
+  dirtyTeachers.clear();
+
+  const delTokens = [...deletedTokens];
+  deletedTokens.clear();
+  const upTokenIds = [...dirtyTokens];
+  dirtyTokens.clear();
+
+  const delExams = [...deletedExams];
+  deletedExams.clear();
+  const upExamIds = [...dirtyExams].filter((id) => !delExams.includes(id));
+  dirtyExams.clear();
+
+  const delSettings = [...deletedSettings];
+  deletedSettings.clear();
+  const upSettingKeys = [...dirtySettings].filter((k) => !delSettings.includes(k));
+  dirtySettings.clear();
+
+  const bankExamIds = [...replacedExamBanks].filter((id) => !delExams.includes(id));
+  replacedExamBanks.clear();
+
+  const clearAll = sessionsClearedAll;
+  sessionsClearedAll = false;
+  const clearExamIds = [...deletedSessionExams];
+  deletedSessionExams.clear();
+  const delEvTokens = [...deletedEventTokens];
+  deletedEventTokens.clear();
+
+  const urgentTokens = [...dirtySessions];
+  dirtySessions.clear();
+  for (const t of urgentTokens) heartbeatSessions.delete(t);
+
+  const hbTokens = includeHeartbeats ? [...heartbeatSessions] : [];
+  if (includeHeartbeats) heartbeatSessions.clear();
+
+  const wasEventPending = pendingEventSync;
+  pendingEventSync = false;
+
+  const upsertTeachers = teacherIds
+    .map((id) => db.prepare('SELECT id, username, pass_hash, salt, created_at FROM teachers WHERE id = ?').get(id))
+    .filter(Boolean);
+
+  const upsertTokens = upTokenIds
+    .map((tok) => db.prepare('SELECT token, teacher_id, created_at FROM teacher_tokens WHERE token = ?').get(tok))
+    .filter(Boolean);
+
+  const upsertExams = upExamIds
+    .map((id) => db.prepare('SELECT id, title, access_code, settings, created_at, teacher_id FROM exams WHERE id = ?').get(id))
+    .filter(Boolean);
+
+  const upsertSettings = upSettingKeys
+    .map((k) => db.prepare('SELECT key, value FROM settings WHERE key = ?').get(k))
+    .filter(Boolean);
+
+  const upsertSections = [];
+  const upsertQuestions = [];
+  for (const examId of bankExamIds) {
+    const secs = db
+      .prepare('SELECT id, exam_id, ord, title, instructions, lock_after, minutes FROM sections WHERE exam_id = ? ORDER BY ord ASC, rowid ASC')
+      .all(examId);
+    const qs = db
+      .prepare(
+        `SELECT q.id, q.section_id, q.ord, q.kind, q.prompt, q.choices, q.answer, q.points, q.shuffle, q.tags
+         FROM questions q JOIN sections s ON s.id = q.section_id
+         WHERE s.exam_id = ? ORDER BY q.ord ASC, q.rowid ASC`
+      )
+      .all(examId);
+    upsertSections.push(...secs);
+    upsertQuestions.push(...qs);
+  }
+
+  const allSessionTokens = [...new Set([...urgentTokens, ...hbTokens])];
+  const upsertSessions = allSessionTokens
+    .map((tok) => db.prepare(`SELECT ${SESSION_COLUMNS} FROM sessions WHERE token = ?`).get(tok))
+    .filter(Boolean);
+
+  const upsertEvents = db
+    .prepare('SELECT id, token, at, type, detail FROM events WHERE id > ? ORDER BY id ASC')
+    .all(lastSyncedEventId);
+
+  const isEmpty =
+    !upsertTeachers.length &&
+    !delTokens.length &&
+    !upsertTokens.length &&
+    !delExams.length &&
+    !upsertExams.length &&
+    !delSettings.length &&
+    !upsertSettings.length &&
+    !bankExamIds.length &&
+    !clearAll &&
+    !clearExamIds.length &&
+    !delEvTokens.length &&
+    !upsertSessions.length &&
+    !upsertEvents.length;
+
+  return {
+    isEmpty,
+    raw: {
+      teacherIds,
+      delTokens,
+      upTokenIds,
+      delExams,
+      upExamIds,
+      delSettings,
+      upSettingKeys,
+      bankExamIds,
+      clearAll,
+      clearExamIds,
+      delEvTokens,
+      urgentTokens,
+      hbTokens,
+      wasEventPending
+    },
+    batch: {
+      upsertTeachers,
+      deleteTokens: delTokens,
+      upsertTokens,
+      deleteExams: delExams,
+      upsertExams,
+      deleteSettings: delSettings,
+      upsertSettings,
+      replaceBankExamIds: bankExamIds,
+      upsertSections,
+      upsertQuestions,
+      clearAllSessions: clearAll,
+      clearSessionExamIds: clearExamIds,
+      deleteEventTokens: delEvTokens,
+      upsertSessions,
+      upsertEvents
+    }
+  };
+}
+
+function requeueSnapshot(raw) {
+  for (const id of raw.teacherIds) dirtyTeachers.add(id);
+  for (const t of raw.delTokens) if (!dirtyTokens.has(t)) deletedTokens.add(t);
+  for (const t of raw.upTokenIds) if (!deletedTokens.has(t)) dirtyTokens.add(t);
+  for (const id of raw.delExams) if (!dirtyExams.has(id)) deletedExams.add(id);
+  for (const id of raw.upExamIds) if (!deletedExams.has(id)) dirtyExams.add(id);
+  for (const k of raw.delSettings) if (!dirtySettings.has(k)) deletedSettings.add(k);
+  for (const k of raw.upSettingKeys) if (!deletedSettings.has(k)) dirtySettings.add(k);
+  for (const id of raw.bankExamIds) if (!deletedExams.has(id)) replacedExamBanks.add(id);
+  if (raw.clearAll) sessionsClearedAll = true;
+  for (const id of raw.clearExamIds) deletedSessionExams.add(id);
+  for (const t of raw.delEvTokens) deletedEventTokens.add(t);
+  for (const t of raw.urgentTokens) dirtySessions.add(t);
+  for (const t of raw.hbTokens) if (!dirtySessions.has(t)) heartbeatSessions.add(t);
+  if (raw.wasEventPending) pendingEventSync = true;
+}
+
+export async function flushRemoteStorage({ includeHeartbeats = false } = {}) {
+  if (!remoteEnabled || !remoteStore) return;
+  if (activeFlush) {
+    await activeFlush;
+    if (!hasUrgentRemoteSync() && !(includeHeartbeats && heartbeatSessions.size)) return;
+  }
+
+  activeFlush = (async () => {
+    while (true) {
+      const snap = drainBatchSnapshot({ includeHeartbeats });
+      if (snap.isEmpty) break;
+      try {
+        await remoteStore.pushBatch(snap.batch);
+        if (snap.batch.upsertEvents.length) {
+          const maxId = snap.batch.upsertEvents[snap.batch.upsertEvents.length - 1].id;
+          lastSyncedEventId = Math.max(lastSyncedEventId, maxId);
+        }
+      } catch (err) {
+        requeueSnapshot(snap.raw);
+        throw err;
+      }
+      if (!hasUrgentRemoteSync() && !(includeHeartbeats && heartbeatSessions.size)) break;
+    }
+  })();
+
+  try {
+    await activeFlush;
+  } finally {
+    activeFlush = null;
+  }
+}
+
+export async function closeRemoteStorage() {
+  if (heartbeatTimer) {
+    clearTimeout(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  if (!remoteStore) return;
+  const store = remoteStore;
+  remoteStore = null;
+  remoteEnabled = false;
+  await store.close();
 }
 
 /* ------------------------------------------------------------------ utils */
@@ -207,6 +676,14 @@ export function checkpointDatabase() {
 
 /** Non-sensitive storage diagnostics for the authenticated teacher dashboard. */
 export function getStorageInfo() {
+  if (remoteEnabled && remoteStore) {
+    return {
+      storageId: db.prepare("SELECT value FROM settings WHERE key = 'storage_id'").get()?.value || '',
+      durable: true,
+      mode: remoteStore.mode || 'supabase',
+      warning: ''
+    };
+  }
   const onRender = process.env.RENDER === 'true' || Boolean(process.env.RENDER_SERVICE_ID);
   const declaredPersistent = process.env.EXAM_STORAGE_MODE === 'persistent';
   const durable = !onRender || declaredPersistent;
@@ -216,7 +693,7 @@ export function getStorageInfo() {
     mode: declaredPersistent ? 'persistent-disk' : onRender ? 'host-filesystem' : 'local-disk',
     warning: durable
       ? ''
-      : 'This Render service is using an ephemeral filesystem. Add a persistent disk or the setup will reset when the service restarts.'
+      : 'This Render service is using an ephemeral filesystem. Configure Supabase or attach a persistent disk so setup does not reset on restart.'
   };
 }
 
@@ -298,10 +775,13 @@ export function setCurrentExamId(id) {
   const teacherId = currentTeacherId();
   if (teacherId) {
     if (!db.prepare('SELECT 1 FROM exams WHERE id = ? AND teacher_id = ?').get(id, teacherId)) return;
-    db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(`teacher_current_exam_${teacherId}`, id);
+    const key = `teacher_current_exam_${teacherId}`;
+    db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, id);
+    markSettingDirty(key);
     return;
   }
   stmtSetPointer.run(id);
+  markSettingDirty('current_exam_id');
 }
 
 export function getExam(examId) {
@@ -358,13 +838,23 @@ export function createExam({ title = 'Untitled Exam', access_code, settings = {}
   const merged = { ...DEFAULT_SETTINGS, ...settings, access_code: code };
   db.prepare('INSERT INTO exams(id, title, access_code, settings, created_at, teacher_id) VALUES(?,?,?,?,?,?)')
     .run(id, title, code, JSON.stringify(merged), now(), currentTeacherId());
+  markExamDirty(id);
   setCurrentExamId(id);
   return getExam(id);
+}
+
+export function assignUnownedExams(teacherId) {
+  if (!teacherId) return;
+  const rows = db.prepare('SELECT id FROM exams WHERE teacher_id IS NULL').all();
+  if (!rows.length) return;
+  db.prepare('UPDATE exams SET teacher_id = ? WHERE teacher_id IS NULL').run(teacherId);
+  for (const r of rows) markExamDirty(r.id);
 }
 
 export function deleteExam(id) {
   const count = currentTeacherId() ? db.prepare('SELECT COUNT(*) AS c FROM exams WHERE teacher_id = ?').get(currentTeacherId()).c : db.prepare('SELECT COUNT(*) AS c FROM exams').get().c;
   if (count <= 1) throw new Error('You need at least one exam.');
+  const sessionTokens = db.prepare('SELECT token FROM sessions WHERE exam_id = ?').all(id).map((r) => r.token);
   db.exec('BEGIN');
   try {
     db.prepare('DELETE FROM questions WHERE section_id IN (SELECT id FROM sections WHERE exam_id = ?)').run(id);
@@ -377,6 +867,7 @@ export function deleteExam(id) {
     db.exec('ROLLBACK');
     throw err;
   }
+  markExamDeleted(id, sessionTokens);
   // If the deleted exam was the current one, re-resolve to the first exam.
   getCurrentExamId();
 }
@@ -424,6 +915,9 @@ function migrateLegacy() {
     .run(id, title, code, JSON.stringify(merged), now());
   db.prepare("UPDATE sections SET exam_id = ? WHERE exam_id IS NULL OR exam_id = ''").run(id);
   db.prepare("DELETE FROM settings WHERE key NOT IN ('current_exam_id', 'storage_id')").run();
+  markExamDirty(id);
+  markExamBankReplaced(id);
+  for (const r of legacyRows) markSettingDeleted(r.key);
   setCurrentExamId(id);
 }
 
@@ -458,6 +952,7 @@ export function setExamSettings(examId, patch) {
     db.exec('ROLLBACK');
     throw err;
   }
+  markExamDirty(id);
   return settingsFor(id);
 }
 
@@ -472,18 +967,30 @@ export function hashPassword(password, salt = crypto.randomBytes(16).toString('h
   return { hash, salt };
 }
 
+export function teacherUsernameExists(username) {
+  return Boolean(db.prepare('SELECT 1 FROM teachers WHERE username = ? COLLATE NOCASE').get(username));
+}
+
 export function ensureTeacher(username, password) {
-  const row = db.prepare('SELECT * FROM teachers WHERE username = ?').get(username);
+  const row = db.prepare('SELECT * FROM teachers WHERE username = ? COLLATE NOCASE').get(username);
   if (row) return row;
   const { hash, salt } = hashPassword(password);
   db.prepare(
     'INSERT INTO teachers(username, pass_hash, salt, created_at) VALUES(?,?,?,?)'
   ).run(username, hash, salt, now());
-  return db.prepare('SELECT * FROM teachers WHERE username = ?').get(username);
+  const created = db.prepare('SELECT * FROM teachers WHERE username = ? COLLATE NOCASE').get(username);
+  markTeacherDirty(created?.id);
+  return created;
+}
+
+export function updateTeacherPassword(teacherId, newPassword) {
+  const { hash, salt } = hashPassword(newPassword);
+  db.prepare('UPDATE teachers SET pass_hash = ?, salt = ? WHERE id = ?').run(hash, salt, teacherId);
+  markTeacherDirty(teacherId);
 }
 
 export function verifyTeacher(username, password) {
-  const row = db.prepare('SELECT * FROM teachers WHERE username = ?').get(username);
+  const row = db.prepare('SELECT * FROM teachers WHERE username = ? COLLATE NOCASE').get(username);
   if (!row) return null;
   const { hash } = hashPassword(password, row.salt);
   const a = Buffer.from(hash, 'hex');
@@ -499,6 +1006,7 @@ export function issueTeacherToken(teacherId) {
     teacherId,
     now()
   );
+  markTokenDirty(token);
   return token;
 }
 
@@ -514,7 +1022,42 @@ export function teacherFromToken(token) {
 }
 
 export function revokeTeacherToken(token) {
+  if (!token) return;
   db.prepare('DELETE FROM teacher_tokens WHERE token = ?').run(token);
+  markTokenDeleted(token);
+}
+
+export function discardUnpersistedRegistration({ teacherId, examId, token }) {
+  db.exec('BEGIN');
+  try {
+    if (token) db.prepare('DELETE FROM teacher_tokens WHERE token = ?').run(token);
+    if (examId) {
+      db.prepare('DELETE FROM questions WHERE section_id IN (SELECT id FROM sections WHERE exam_id = ?)').run(examId);
+      db.prepare('DELETE FROM sections WHERE exam_id = ?').run(examId);
+      db.prepare('DELETE FROM exams WHERE id = ?').run(examId);
+    }
+    if (teacherId != null) {
+      db.prepare('DELETE FROM settings WHERE key = ?').run(`teacher_current_exam_${teacherId}`);
+      db.prepare('DELETE FROM teachers WHERE id = ?').run(teacherId);
+    }
+    db.exec('COMMIT');
+  } catch {
+    try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+  }
+  if (teacherId != null) {
+    dirtyTeachers.delete(Number(teacherId));
+    dirtySettings.delete(`teacher_current_exam_${teacherId}`);
+    deletedSettings.delete(`teacher_current_exam_${teacherId}`);
+  }
+  if (examId) {
+    dirtyExams.delete(examId);
+    deletedExams.delete(examId);
+    replacedExamBanks.delete(examId);
+  }
+  if (token) {
+    dirtyTokens.delete(token);
+    deletedTokens.delete(token);
+  }
 }
 
 /* ------------------------------------------------------------- exam shape */
@@ -603,16 +1146,12 @@ export function replaceExam({ title, sections }, examId = getCurrentExamId()) {
     }
   };
   tx();
+  markExamBankReplaced(id);
   if (title) setExamSettings(id, { exam_title: title });
   return getExamBlueprint(id);
 }
 
 /* --------------------------------------------------------------- sessions */
-
-const SESSION_COLUMNS = `token, exam_id, access_code, student_name, student_no, class_section,
-  status, created_at, started_at, deadline, last_seen, order_seed, answers,
-  section_index, max_section, cursor, reloads, ip, user_agent, submitted_at, score,
-  max_score, pending_manual, violations, flagged, manual_notes, manual_scores`;
 
 export function createSession(data) {
   const token = crypto.randomBytes(24).toString('base64url');
@@ -634,7 +1173,23 @@ export function createSession(data) {
     data.ip || '',
     data.user_agent || ''
   );
+  markSessionDirty(token, { urgent: true });
   return getSession(token);
+}
+
+export function discardUnpersistedSession(token) {
+  if (!token) return;
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM events WHERE token = ?').run(token);
+    db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+    db.exec('COMMIT');
+  } catch {
+    try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+  }
+  dirtySessions.delete(token);
+  heartbeatSessions.delete(token);
+  deletedEventTokens.delete(token);
 }
 
 export function getSession(token) {
@@ -685,6 +1240,8 @@ export function updateSession(token, patch) {
     return v;
   });
   db.prepare(`UPDATE sessions SET ${sets} WHERE token = ?`).run(...values, token);
+  const heartbeatOnly = keys.length === 1 && keys[0] === 'last_seen';
+  markSessionDirty(token, { urgent: !heartbeatOnly });
   return getSession(token);
 }
 
@@ -695,6 +1252,7 @@ export function logEvent(token, type, detail = '') {
     type,
     String(detail).slice(0, 500)
   );
+  if (remoteEnabled) pendingEventSync = true;
 }
 
 export function eventsFor(token) {
@@ -709,10 +1267,13 @@ export function eventsSince(after = 0) {
 
 export function deleteSessionsExceptKeep(examId = null) {
   if (examId) {
+    const tokens = db.prepare('SELECT token FROM sessions WHERE exam_id = ?').all(examId).map((r) => r.token);
     db.prepare('DELETE FROM events WHERE token IN (SELECT token FROM sessions WHERE exam_id = ?)').run(examId);
     db.prepare('DELETE FROM sessions WHERE exam_id = ?').run(examId);
+    markExamSessionsCleared(examId, tokens);
     return;
   }
   db.prepare('DELETE FROM events').run();
   db.prepare('DELETE FROM sessions').run();
+  markAllSessionsCleared();
 }
