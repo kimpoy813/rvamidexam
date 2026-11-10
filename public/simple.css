@@ -57,3 +57,12 @@
 .teacher-actions summary { cursor:pointer; color:var(--brand-dark); font-weight:650; }
 .teacher-actions .row { margin-top:8px; gap:6px; }
 .result-key { font-family:var(--mono); font-size:17px; font-weight:700; overflow-wrap:anywhere; margin:12px 0; }
+/* Render-style student roster, without claiming heartbeat is proof of attention. */
+#progressRows { display:grid; gap:10px; }
+.neon-roster-row { display:grid; grid-template-columns:42px minmax(130px,1.4fr) 85px minmax(100px,1fr) auto auto; gap:12px; align-items:center; border:1px solid var(--line); border-radius:14px; padding:12px 14px; box-shadow:var(--shadow-sm); }
+.neon-roster-row.flagged { border-color:#fecdd3; background:#fffbfb; }
+.neon-roster-row .teacher-actions { grid-column:2 / -1; }
+.neon-roster-person { min-width:0; }
+.neon-roster-status { display:grid; gap:4px; }
+@media (max-width:1020px) { .neon-roster-row { grid-template-columns:42px minmax(0,1fr) auto; } .neon-roster-row .progress-cell, .neon-roster-row .teacher-actions { grid-column:2 / -1; } }
+@media (max-width:640px) { .neon-roster-row { gap:8px; padding:12px; } .neon-roster-time { grid-column:2; } .neon-roster-status { grid-column:2 / -1; } }
