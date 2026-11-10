@@ -29,17 +29,21 @@ test('simplified teacher and student interfaces complete an exam', { skip: !url,
     Object.defineProperty(input, 'files', { configurable:true, value:[{size:text.length, text:async()=>text}] });
     input.dispatchEvent(new teacherDom.window.Event('change',{bubbles:true})); await wait(()=>t.querySelector('#importText').value === text);
     t.querySelector('#previewImport').click();
-    await wait(()=>t.querySelector('#importPreview button')); assert.match(t.querySelector('#importPreview').textContent, /Correct: Yes/);
-    t.querySelector('#importPreview button').click(); assert.equal(t.querySelectorAll('.question-editor .option').length, 3);
-    t.querySelector('.question-editor button').click(); t.querySelector('#addQuestion').click();
+    await wait(()=>/Pick one/.test(t.querySelector('#editors').textContent)); assert.match(t.querySelector('#bankCount').textContent,/1 parts · 1 items/);
+    assert.equal(t.querySelectorAll('.question-editor .option').length, 3); assert.match(t.querySelector('.bp-answer').textContent,/Yes/);
+    t.querySelector('.bp-editor button').click(); t.querySelector('#addQuestion').click();
     fill(t.querySelector('#examTitle'),'Test from UI'); fill(t.querySelector('.prompt'),'Select the answer'); [...t.querySelectorAll('.option')].forEach((x,i)=>fill(x,`Option ${i+1}`));
     t.querySelector('#addQuestion').click(); const second = t.querySelectorAll('.question-editor')[1]; fill(second.querySelector('.prompt'),'Second question'); [...second.querySelectorAll('.option')].forEach((x,i)=>fill(x,`Second ${i+1}`));
     t.querySelector('#create').dispatchEvent(new teacherDom.window.Event('submit',{bubbles:true,cancelable:true})); await wait(()=>/Exam created/.test(t.querySelector('#message').textContent));
     const code = t.querySelector('#message').textContent.match(/code ([0-9A-F]+)/)[1];
     t.querySelector('[data-view=questions]').click(); t.querySelector('#loadBank').click();
     await wait(()=>/Saved bank loaded/.test(t.querySelector('#draftStatus').textContent));
-    assert.equal(t.querySelectorAll('.question-editor').length,2);
-    fill(t.querySelector('.prompt'),'Edited before join'); t.querySelector('#create').dispatchEvent(new teacherDom.window.Event('submit',{bubbles:true,cancelable:true}));
+    assert.equal(t.querySelectorAll('.question-editor').length,2); assert.match(t.querySelector('#importText').value,/Select the answer/);
+    const savedText=t.querySelector('#importText').value; fill(t.querySelector('#importText'),savedText+'\nUnpreviewed change'); t.querySelector('#importText').dispatchEvent(new teacherDom.window.Event('input',{bubbles:true}));
+    t.querySelector('#create').dispatchEvent(new teacherDom.window.Event('submit',{bubbles:true,cancelable:true})); assert.match(t.querySelector('#message').textContent,/Preview it before saving/);
+    fill(t.querySelector('#importText'),savedText);t.querySelector('#importText').dispatchEvent(new teacherDom.window.Event('input',{bubbles:true}));
+    const card=t.querySelector('.bp-q'); assert.equal(card.querySelector('.bp-editor').classList.contains('hidden'),true);card.querySelector('.bp-q-head button').click();assert.equal(card.querySelector('.bp-editor').classList.contains('hidden'),false);
+    fill(t.querySelector('.prompt'),'Edited before join'); t.querySelector('.prompt').dispatchEvent(new teacherDom.window.Event('input',{bubbles:true}));assert.equal(card.querySelector('.bp-prompt').textContent,'Edited before join'); t.querySelector('#create').dispatchEvent(new teacherDom.window.Event('submit',{bubbles:true,cancelable:true}));
     await wait(()=>/Question bank saved/.test(t.querySelector('#message').textContent));
 
     studentDom = new JSDOM(fs.readFileSync(new URL('../public/neon.html', import.meta.url),'utf8'), { url:base+'/' }); use(studentDom); await import('../public/neon-student.js?simple-ui-test'); const s = studentDom.window.document;

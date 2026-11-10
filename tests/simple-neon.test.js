@@ -41,6 +41,7 @@ test('serverless exam workflow survives concurrent saves and isolates teachers',
     assert.equal((await call(`exams/${exam.id}/bank`, undefined, other)).status,404);
     assert.equal((await call(`exams/${exam.id}/bank`)).status,401);
     const loaded = await call(`exams/${exam.id}/bank`,undefined,teacher); assert.equal(loaded.data.locked,false);
+    const legacyPreview=await call('import-preview',{text:loaded.data.text},teacher); assert.equal(legacyPreview.status,200); assert.equal(legacyPreview.data.sections[0].questions[0].answer,'2');
     const update = {title:'Math updated',duration:10,questions:loaded.data.questions,revision:loaded.data.revision};
     assert.equal((await call(`exams/${exam.id}/bank`,update,other)).status,404);
     assert.equal((await call(`exams/${exam.id}/bank`,update,teacher)).status,200);

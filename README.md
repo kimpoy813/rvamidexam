@@ -465,7 +465,11 @@ page; the teacher retains the graded result.
    The Questions tab can load and edit the selected exam before any student
    has joined. Once an attempt exists, its bank is locked to protect saved
    answers and results; create a new exam instead. The editor warns about
-   concurrent edits rather than silently overwriting them.
+   concurrent edits rather than silently overwriting them. The question bank
+   offers a Render-style part and answer preview, inline editors, and saved
+   text reload. Pasted text must be previewed before saving. Part timer and
+   locking settings are retained when previewed parts keep their names and
+   order; review them whenever parts change.
 3. Answers save as students make selections or type. Students must keep the same tab
    to resume after a reload; this first version cannot resume on a different
    browser or device. Each timed part starts when entered, continues while

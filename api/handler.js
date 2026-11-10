@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import { normalizeBlueprint, previewOriginalImport } from '../server/neon/blueprint.js';
 import { gradeOne, rng, hashString, shuffleWith } from '../server/lib/exam-engine.js';
+import { examToText } from '../server/lib/importer.js';
 
 const scrypt = promisify(crypto.scrypt);
 let pool;
@@ -216,7 +217,14 @@ export default async function handler(req, res) {
         if (!r.rows[0]) throw fail(404, 'Exam not found.');
         const exam = r.rows[0];
         const count = await query('SELECT EXISTS(SELECT 1 FROM simple_attempts WHERE exam_id=$1) AS locked', [examId]);
-        return send(res,200,{...exam, locked:count.rows[0].locked, revision:bankRevision(exam)});
+        const sections = [];
+        for (const q of exam.questions) {
+          const index=q.section?.index ?? 0;
+          if (!sections[index]) sections[index]={title:q.section?.title || 'Part 1',instructions:q.section?.instructions || '',questions:[]};
+          sections[index].questions.push({...q,kind:q.kind || 'mcq',points:q.points ?? 1,answer:q.kind ? q.answer : q.choices[q.answer]});
+        }
+        const text = `${exam.title}\n\n${examToText(sections.filter(Boolean))}`;
+        return send(res,200,{...exam, text, locked:count.rows[0].locked, revision:bankRevision(exam)});
       }
       const b = await bodyOf(req), title = String(b.title || '').trim(), duration = Number(b.duration);
       if (!title || title.length > 150 || !Number.isInteger(duration) || duration < 1 || duration > 600 || !/^[a-f0-9]{64}$/.test(String(b.revision || ''))) throw fail(400, 'Provide a valid title, duration and bank revision.');
