@@ -131,8 +131,7 @@ async function openDashboard(pathname = '/teacher') {
   define('setInterval', (fn, ms) => nativeSetInterval(fn, ms));
   define('clearInterval', (id) => nativeClearInterval(id));
 
-  // jsdom has no EventSource, so teacher.js falls back to polling — the same
-  // path a browser takes when the stream drops.
+  // Monitoring uses polling, which also works across serverless instances.
   await import(`${path.join(work, 'teacher.js')}?r=${Math.random()}`);
   return win;
 }
@@ -170,6 +169,27 @@ test('the dashboard signs in and renders the live roster', async () => {
   assert.match($(win, '#rosterCount').textContent, /3 joined/);
   assert.match($(win, '#codeText').textContent, new RegExp(accessCode),
     'the access code should be shown for sharing');
+});
+
+test('dashboard polls immediately and requests the selected scope', async () => {
+  const win = await openDashboard();
+  const calls = [];
+  define('fetch', (url, opts) => {
+    calls.push(String(url));
+    return realFetch(String(url).startsWith('http') ? url : BASE + url, opts);
+  });
+  await settle(800);
+  assert.match($(win, '#connText').textContent, /polling/i);
+  assert.ok(calls.some(url => url === '/api/teacher/roster'));
+  const scope = $(win, '#scopeSelect');
+  scope.value = 'all';
+  scope.dispatchEvent(new win.Event('change', { bubbles: true }));
+  await settle(300);
+  assert.ok(calls.some(url => url === '/api/teacher/roster?all=1'));
+  scope.value = 'current';
+  scope.dispatchEvent(new win.Event('change', { bubbles: true }));
+  await settle(300);
+  assert.ok(calls.filter(url => url === '/api/teacher/roster').length >= 2);
 });
 
 test('a flagged student is called out in the roster', async () => {
