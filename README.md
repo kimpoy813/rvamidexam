@@ -440,8 +440,13 @@ remain necessary to retain accounts and data.
 
 The Vercel deployment has a separate, smaller version of the app. It supports
 teacher self-registration, multiple-choice exams, individual answer autosaves,
-and teacher results. It does **not** include the original app's live proctoring,
-question imports, essay grading, or data migration from SQLite. Students see
+teacher results, and a periodically refreshed snapshot of saved student progress.
+The snapshot does not indicate whether students are online. It does **not**
+include the original app's live proctoring,
+essay grading, or data migration from SQLite. The question editor supports a
+limited text/JSON/CSV import for one-point single-answer multiple choice and
+true/false questions; other question types and point values are rejected, and
+sections and instructions are not retained. Students see
 their score after submitting. Existing SQLite accounts and exams will not
 appear in this version; it uses separate `simple_*` PostgreSQL tables.
 
@@ -472,3 +477,18 @@ TEST_DATABASE_URL='postgresql://...' node --test tests/simple-neon.test.js
 
 Do not run this test against a production database. Without `TEST_DATABASE_URL`
 it is skipped. `npm test` still exercises the existing SQLite application.
+
+### Original-app PostgreSQL port (development only)
+
+`server/neon/exam-repository.js` and `attempt-repository.js` are standalone,
+async storage primitives for the original question types and grading engine.
+They are **not wired to any HTTP routes or deployment** and must not be treated
+as a working replacement for the original app. New attempt snapshots keep the
+question bank and settings used at join time, and transaction locks protect
+bank replacement, concurrent saves, submission, and grading. Session tokens are
+stored hashed. Remaining work includes porting and integrating original student
+and teacher APIs, account management, navigation, integrity monitoring, results,
+imports, and original UI; migrations and real deployment testing are also needed.
+
+The opt-in `tests/neon-exam-repository.test.js` uses `TEST_DATABASE_URL` for an
+isolated temporary schema. Use only a disposable database for this test.

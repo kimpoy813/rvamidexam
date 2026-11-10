@@ -25,6 +25,10 @@ test('simplified teacher and student interfaces complete an exam', { skip: !url,
     await wait(()=>!t.querySelector('#dashboard').classList.contains('hidden'));
     t.querySelector('#newExam').click(); assert.equal(t.querySelector('#questionsView').classList.contains('hidden'), false);
     assert.equal(t.querySelector('[data-view=questions]').getAttribute('aria-selected'), 'true');
+    fill(t.querySelector('#importText'), 'Quiz\n\n1. Pick one\nA. Yes *\nB. No\nC. Maybe'); t.querySelector('#previewImport').click();
+    await wait(()=>t.querySelector('#importPreview button')); assert.match(t.querySelector('#importPreview').textContent, /Correct: Yes/);
+    t.querySelector('#importPreview button').click(); assert.equal(t.querySelectorAll('.question-editor .option').length, 3);
+    t.querySelector('.question-editor button').click(); t.querySelector('#addQuestion').click();
     fill(t.querySelector('#examTitle'),'Test from UI'); fill(t.querySelector('.prompt'),'Select the answer'); [...t.querySelectorAll('.option')].forEach((x,i)=>fill(x,`Option ${i+1}`));
     t.querySelector('#addQuestion').click(); const second = t.querySelectorAll('.question-editor')[1]; fill(second.querySelector('.prompt'),'Second question'); [...second.querySelectorAll('.option')].forEach((x,i)=>fill(x,`Second ${i+1}`));
     t.querySelector('#create').dispatchEvent(new teacherDom.window.Event('submit',{bubbles:true,cancelable:true})); await wait(()=>/Exam created/.test(t.querySelector('#message').textContent));
