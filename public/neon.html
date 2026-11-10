@@ -1,5 +1,32 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Student exam</title><link rel="stylesheet" href="/simple.css"></head><body>
-<header><strong>EXAM PORTAL</strong><span class="muted">Student examination</span></header>
-<main><section class="card" id="join"><h1>Enter your exam</h1><p class="muted">Ask your teacher for the access code. Your answers are saved as you select them.</p><form id="joinForm"><label for="code">Exam code</label><input id="code" required maxlength="30" autocomplete="off"><label for="name">Full name</label><input id="name" required minlength="2" maxlength="80" autocomplete="name"><label for="number">Student number</label><input id="number" required minlength="2" maxlength="40"><p class="muted" style="margin-top:14px">The timer starts when you select Start exam.</p><button type="submit">Start exam</button></form></section>
-<section id="exam" class="card hidden"><div class="row" style="justify-content:space-between"><h1 id="title">Exam</h1><span class="timer" id="timer"></span></div><p id="save" class="notice" role="status" aria-live="polite">Answers are saved automatically.</p><div id="questions"></div><button id="submit" type="button">Submit exam</button></section>
-<section id="result" class="card hidden"><h1>Exam submitted</h1><p id="score"></p><p class="muted">You can close this page.</p></section><div id="message" class="notice error hidden" role="alert"></div></main><script type="module" src="/neon-student.js"></script></body></html>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Examination — Student Entry</title><link rel="stylesheet" href="/css/app.css"><link rel="stylesheet" href="/css/exam.css"><link rel="stylesheet" href="/simple.css"></head>
+<body>
+<main class="entry" id="join"><div class="entry-grid">
+  <section class="entry-hero">
+    <div class="brand"><div class="brand-mark">EX</div><div><span class="brand-text">RVM</span><span class="brand-sub">Online Examination</span></div></div>
+    <p class="entry-eyebrow">Student examination portal</p><h1>Ready for your examination?</h1>
+    <p class="muted" style="margin-top:12px">Your teacher will provide your exam access code. Read the instructions before you begin.</p>
+    <div class="rules"><h3 class="rules-title">Before you begin</h3><ul class="rules-list">
+      <li><b>Your exam is timed.</b> The timer starts when you enter and continues if you refresh the page.</li>
+      <li><b>Answers save automatically.</b> Wait for the saved message after choosing an answer.</li>
+      <li><b>You can go back.</b> Review and change answers before you submit.</li>
+      <li><b>Keep this tab.</b> You can resume after a refresh in the same tab, but not on another device.</li>
+      <li><b>Your score appears on submission.</b> Your teacher can review your responses.</li>
+    </ul></div>
+  </section>
+  <section class="card entry-panel"><div class="card-pad"><div class="panel-kicker"><span class="panel-kicker-dot"></span> Student check-in</div><h2>Ready to begin?</h2><p class="muted small" style="margin-top:5px">Enter your details below. Your teacher will provide the access code.</p>
+    <form id="joinForm" style="margin-top:22px"><div class="field"><label for="code">Exam access code</label><input id="code" type="text" class="input-code" required maxlength="30" autocomplete="off" placeholder="Exam code"></div>
+    <div class="field"><label for="name">Full name <span class="muted">(as it appears in the class record)</span></label><input id="name" type="text" required minlength="2" maxlength="80" autocomplete="name" placeholder="e.g. Maria Santos"></div>
+    <div class="field"><label for="number">Student number</label><input id="number" type="text" required minlength="2" maxlength="40" placeholder="e.g. 2024-0193"></div>
+    <button type="submit" class="btn btn-primary btn-lg btn-block" style="margin-top:20px">Start examination</button></form></div>
+    <div class="entry-foot"><span class="tiny muted">Your responses are saved to your teacher's exam.</span></div></section>
+</div></main>
+<div id="exam" class="hidden">
+  <header class="appbar"><div class="appbar-in"><div class="brand"><div class="brand-mark">EX</div><div><span class="brand-text" id="title">Examination</span><span class="brand-sub">Examination in progress</span></div></div><div class="spacer"></div><div class="timer" id="timer" aria-live="off"></div><button class="btn btn-primary btn-sm" id="submitTop" type="button">Submit</button></div></header>
+  <div class="exam-main"><aside class="rail"><div class="rail-card"><div class="rail-head"><div class="t">Your progress</div></div><div class="progress-ring"><div><div class="neon-progress" id="progress">0 / 0</div><div class="tiny muted">questions answered</div></div></div></div><div class="rail-card"><div class="rail-head"><div class="t">Question map</div></div><div class="palette" id="palette"></div><div class="legend"><span><i style="background:#ecfdf5;border-color:#a7f3d0"></i> Answered</span><span><i style="background:#fff"></i> Blank</span></div></div></aside>
+  <main><section class="qcard"><div class="qcard-head"><span class="qchip" id="qChip">Question</span><span class="qpoints">1 point</span></div><div class="qbody" id="questions"></div><div class="qfoot"><button class="btn btn-ghost" id="prev" type="button">← Previous</button><span class="tiny muted" id="position"></span><button class="btn btn-primary" id="next" type="button">Next →</button></div></section></main></div>
+  <div class="dock"><div class="dock-in"><span class="save-state" id="save" role="status" aria-live="polite">Answers are saved automatically.</span><div class="spacer"></div><button class="btn btn-primary" id="submit" type="button">Submit examination</button></div></div>
+</div>
+<main class="shell shell-narrow hidden" id="result"><section class="card result-hero"><div class="brand-mark neon-result-mark">✓</div><h1>Exam submitted</h1><p id="score" style="margin-top:12px"></p><p class="muted" style="margin-top:8px">You can close this page.</p></section></main>
+<div id="message" class="neon-alert hidden" role="alert"></div><script type="module" src="/neon-student.js"></script></body></html>

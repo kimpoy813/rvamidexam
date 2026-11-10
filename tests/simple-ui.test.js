@@ -23,13 +23,21 @@ test('simplified teacher and student interfaces complete an exam', { skip: !url,
     fill(t.querySelector('#username'),'ui_teacher'); fill(t.querySelector('#password'),'strong-test-password'); t.querySelector('#register').click();
     await wait(()=>/Account created/.test(t.querySelector('#message').textContent)); t.querySelector('#login').dispatchEvent(new teacherDom.window.Event('submit',{bubbles:true,cancelable:true}));
     await wait(()=>!t.querySelector('#dashboard').classList.contains('hidden'));
+    t.querySelector('#newExam').click(); assert.equal(t.querySelector('#questionsView').classList.contains('hidden'), false);
+    assert.equal(t.querySelector('[data-view=questions]').getAttribute('aria-selected'), 'true');
     fill(t.querySelector('#examTitle'),'Test from UI'); fill(t.querySelector('.prompt'),'Select the answer'); [...t.querySelectorAll('.option')].forEach((x,i)=>fill(x,`Option ${i+1}`));
+    t.querySelector('#addQuestion').click(); const second = t.querySelectorAll('.question-editor')[1]; fill(second.querySelector('.prompt'),'Second question'); [...second.querySelectorAll('.option')].forEach((x,i)=>fill(x,`Second ${i+1}`));
     t.querySelector('#create').dispatchEvent(new teacherDom.window.Event('submit',{bubbles:true,cancelable:true})); await wait(()=>/Exam created/.test(t.querySelector('#message').textContent));
     const code = t.querySelector('#message').textContent.match(/code ([0-9A-F]+)/)[1];
     studentDom = new JSDOM(fs.readFileSync(new URL('../public/neon.html', import.meta.url),'utf8'), { url:base+'/' }); use(studentDom); await import('../public/neon-student.js?simple-ui-test'); const s = studentDom.window.document;
     fill(s.querySelector('#code'),code); fill(s.querySelector('#name'),'Test Student'); fill(s.querySelector('#number'),'001'); s.querySelector('#joinForm').dispatchEvent(new studentDom.window.Event('submit',{bubbles:true,cancelable:true}));
-    await wait(()=>s.querySelectorAll('.choice input').length===4); const radio=s.querySelector('.choice input'); radio.checked=true; radio.dispatchEvent(new studentDom.window.Event('change',{bubbles:true})); await wait(()=>/Answer saved/.test(s.querySelector('#save').textContent)); s.querySelector('#submit').click();
-    await wait(()=>!s.querySelector('#result').classList.contains('hidden')); assert.match(s.querySelector('#score').textContent,/1 \/ 1/);
+    await wait(()=>s.querySelectorAll('.choice input').length===4); const radio=s.querySelector('.choice input'); radio.checked=true; radio.dispatchEvent(new studentDom.window.Event('change',{bubbles:true})); await wait(()=>/Answer saved/.test(s.querySelector('#save').textContent));
+    assert.equal(s.querySelector('#progress').textContent, '1 / 2'); s.querySelector('#next').click(); assert.equal(s.querySelector('#qChip').textContent, 'Question 2');
+    const secondRadio = s.querySelector('.choice input'); secondRadio.checked=true; secondRadio.dispatchEvent(new studentDom.window.Event('change',{bubbles:true})); await wait(()=>/Answer saved/.test(s.querySelector('#save').textContent));
+    s.querySelector('#prev').click(); assert.equal(s.querySelector('.choice input').checked, true); s.querySelector('#next').click(); s.querySelector('#submit').click();
+    await wait(()=>!s.querySelector('#result').classList.contains('hidden')); assert.match(s.querySelector('#score').textContent,/2 \/ 2/);
+    use(teacherDom); t.querySelector('[data-view=results]').click(); await wait(()=>/Test Student/.test(t.querySelector('#resultRows').textContent));
+    assert.match(t.querySelector('#resultRows').textContent,/2 \/ 2/); assert.equal(t.querySelector('#joinedKpi').textContent, '1');
   } finally {
     teacherDom?.window.close(); studentDom?.window.close(); for (const [key,value] of Object.entries(original)) { if (value === undefined) delete globalThis[key]; else globalThis[key]=value; }
     server.closeAllConnections(); await new Promise(r=>server.close(r)); await closeTestPool(); delete process.env.DATABASE_URL;
