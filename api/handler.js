@@ -1,6 +1,7 @@
 import pg from 'pg';
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
+import { parseAny } from '../server/lib/importer.js';
 
 const scrypt = promisify(crypto.scrypt);
 let pool;
@@ -125,6 +126,25 @@ export default async function handler(req, res) {
     }
     if (path === 'simple/logout' && method === 'POST') { const t = await teacher(req); await query('DELETE FROM simple_teacher_tokens WHERE token_hash=$1 AND teacher_id=$2', [hash(String(req.headers['x-teacher-token'])), t.id]); return send(res, 200, { ok: true }); }
     if (path === 'simple/me' && method === 'GET') return send(res, 200, await teacher(req));
+    if (path === 'simple/import-preview' && method === 'POST') {
+      await teacher(req);
+      const b = await bodyOf(req);
+      if (typeof b.text !== 'string' || !b.text.trim() || b.text.length > 200000) throw fail(400, 'Provide up to 200,000 characters of exam text.');
+      let parsed;
+      try { parsed = parseAny(b.text); } catch (e) { throw fail(400, `Could not parse import: ${e.message}`); }
+      const raw = parsed.sections.flatMap(section => section.questions);
+      const unsupported = [];
+      const converted = raw.map((q, i) => {
+        const choices = Array.isArray(q.choices) ? q.choices.map(c => String(c).trim()) : [];
+        const matching = choices.reduce((a, c, j) => c === String(q.answer ?? '').trim() ? [...a, j] : a, []);
+        if (!['mcq', 'truefalse'].includes(q.kind) || Number(q.points) !== 1 || matching.length !== 1) unsupported.push(i + 1);
+        return { prompt: q.prompt, choices, answer: matching[0] };
+      });
+      if (unsupported.length) throw fail(400, `Cannot import questions ${unsupported.join(', ')}: only single-answer multiple choice and true/false with one point and an unambiguous answer key are supported. No questions were imported.`);
+      // Apply the same limits as exam creation before displaying a preview.
+      const questions = parseQuestions(converted).map(({ id, ...q }) => q);
+      return send(res, 200, { title: parsed.title, questions, warnings: [...(parsed.warnings || []), 'Sections and section instructions are not retained in this version.'] });
+    }
     if (path === 'simple/exams' && method === 'GET') { const t = await teacher(req); const r = await query('SELECT id,title,code,duration,open,created_at FROM simple_exams WHERE teacher_id=$1 ORDER BY created_at DESC', [t.id]); return send(res, 200, { exams: r.rows }); }
     if (path === 'simple/exams' && method === 'POST') {
       const t = await teacher(req); const b = await bodyOf(req); const title = String(b.title || '').trim(); const duration = Number(b.duration);
@@ -141,6 +161,17 @@ export default async function handler(req, res) {
       const r = await query('UPDATE simple_exams SET open=$3 WHERE id=$1 AND teacher_id=$2 RETURNING id,open', [toggleMatch[1],t.id,b.open]);
       if (!r.rows[0]) throw fail(404, 'Exam not found.');
       return send(res,200,r.rows[0]);
+    }
+    // Progress is a snapshot of saved answers, not evidence that a student is online.
+    const progressMatch = path.match(/^simple\/exams\/([\w-]+)\/progress$/);
+    if (progressMatch && method === 'GET') {
+      const t = await teacher(req);
+      const exam = await query('SELECT id, jsonb_array_length(questions) AS total FROM simple_exams WHERE id=$1 AND teacher_id=$2', [progressMatch[1], t.id]);
+      if (!exam.rows[0]) throw fail(404, 'Exam not found.');
+      const r = await query(`SELECT student_name, student_no, submitted_at, deadline,
+        (SELECT count(*)::int FROM jsonb_object_keys(answers)) AS answered
+        FROM simple_attempts WHERE exam_id=$1 ORDER BY started_at DESC`, [progressMatch[1]]);
+      return send(res, 200, { total: exam.rows[0].total, attempts: r.rows });
     }
     const resultMatch = path.match(/^simple\/exams\/([\w-]+)\/results$/);
     if (resultMatch && method === 'GET') {

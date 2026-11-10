@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   submitted_at BIGINT,
   score DOUBLE PRECISION,
   max_score DOUBLE PRECISION,
-  pending_manual INTEGER NOT NULL DEFAULT 0,
+  pending_manual DOUBLE PRECISION NOT NULL DEFAULT 0,
   violations INTEGER NOT NULL DEFAULT 0,
   flagged INTEGER NOT NULL DEFAULT 0,
   manual_notes TEXT DEFAULT '',
@@ -88,3 +88,9 @@ CREATE TABLE IF NOT EXISTS events (
   detail TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_events_token ON events(token, at);
+
+-- Immutable per-attempt paper. Existing sessions remain NULL until migrated;
+-- new serverless sessions must snapshot the bank before they start.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS paper_snapshot TEXT;
+
+ALTER TABLE sessions ALTER COLUMN pending_manual TYPE DOUBLE PRECISION;

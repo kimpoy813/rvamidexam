@@ -23,9 +23,19 @@ test('serverless exam workflow survives concurrent saves and isolates teachers',
     const teacher = (await call('login', { username:'teacher_one', password:'very-strong-password' })).data.token; assert.ok(teacher);
     await call('register', { username:'teacher_two', password:'very-strong-password' });
     const other = (await call('login', { username:'teacher_two', password:'very-strong-password' })).data.token;
+    const text = 'Imported quiz\n\n1. Two plus two?\nA. 3\nB. 4 *\nC. 5';
+    assert.equal((await call('import-preview', { text })).status, 401);
+    const preview = await call('import-preview', { text }, teacher);
+    assert.equal(preview.status, 200, JSON.stringify(preview.data));
+    assert.equal(preview.data.questions[0].answer, 1); assert.equal(preview.data.questions[0].choices.length, 3);
+    const badImport = await call('import-preview', { text: '1. Explain your answer (essay)' }, teacher);
+    assert.equal(badImport.status, 400);
+    assert.equal((await call('import-preview', { text:'No questions here' }, teacher)).status, 400);
     const created = await call('exams', { title:'Math', duration:10, questions:[{ prompt:'One plus one?', choices:['1','2','3'], answer:1 },{ prompt:'Two plus two?', choices:['4','5'], answer:0 }] }, teacher);
     assert.equal(created.status,201,JSON.stringify(created.data)); const exam = created.data;
     assert.equal((await call(`exams/${exam.id}/results`, undefined, other)).status,404);
+    assert.equal((await call(`exams/${exam.id}/progress`, undefined, other)).status,404);
+    assert.equal((await call(`exams/${exam.id}/progress`)).status,401);
     assert.equal((await call(`exams/${exam.id}/open`, {open:false}, other)).status,404);
     assert.equal((await call('exams',undefined,other)).data.exams.length,0);
     const joined = await Promise.all(Array.from({length:50},(_,i)=>call('join',{ code:exam.code,name:`Student ${i}`,number:`N-${i}` })));
@@ -35,6 +45,10 @@ test('serverless exam workflow survives concurrent saves and isolates teachers',
     assert.ok(attempts.every(x=>!JSON.stringify(x.data.questions).includes('"answer"')));
     const saves = await Promise.all(joined.flatMap((entry,i)=>attempts[i].data.questions.map((q,n)=>call('attempt/answer',{questionId:q.id,answer:n===0 ? 1:0},undefined,entry.data.token))));
     assert.ok(saves.every(x=>x.status===200), JSON.stringify(saves.find(x=>x.status!==200)));
+    const progress = await call(`exams/${exam.id}/progress`, undefined, teacher);
+    assert.equal(progress.status, 200); assert.equal(progress.data.total, 2); assert.equal(progress.data.attempts.length, 50);
+    assert.ok(progress.data.attempts.every(x => x.answered === 2 && !x.submitted_at));
+    assert.ok(!JSON.stringify(progress.data).includes('answers'));
     const submitted = await Promise.all(joined.map(x=>call('attempt/submit',{},undefined,x.data.token)));
     assert.ok(submitted.every(x=>x.status===200 && x.data.score===2),JSON.stringify(submitted.find(x=>x.status!==200 || x.data.score!==2)));
     await closeTestPool(); // Simulate a serverless instance restart.
