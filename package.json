@@ -16,5 +16,8 @@
   },
   "devDependencies": {
     "jsdom": "^30.0.1"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
   }
 }

@@ -25,9 +25,7 @@ const state = {
   search: '',
   tab: 'live',
   scope: 'current',   // 'current' = monitor the selected exam, 'all' = every exam
-  sse: null,
   poll: null,
-  allPoll: null,
   lastFeedAt: 0,
   drawerToken: null,
   // Structured question-bank draft shown in the teacher preview. Raw pasted
@@ -162,7 +160,7 @@ async function switchExam(id) {
 
 async function reloadForExam() {
   await loadExams();
-  connect(); // re-subscribe the live stream to the new current exam
+  connect(); // Refresh the newly selected exam.
   await loadSettings({ force: true });
   // Never leave the previous exam's pasted text or draft visible after using
   // the exam switcher.
@@ -291,84 +289,43 @@ function switchTab(name) {
 
 /* ============================================================== live feed */
 
+// Poll the server rather than relying on an in-memory SSE hub. A serverless
+// deployment can route consecutive requests to different instances. Generation
+// numbers prevent late responses from an old scope or exam replacing new data.
+let rosterGeneration = 0;
+
 function connect() {
   disconnect();
-  try {
-    const token = localStorage.getItem('rvm_teacher_token');
-    const url = `/api/teacher/live?t=${encodeURIComponent(token)}`;
-    const es = new EventSource(url);
-    state.sse = es;
-
-    es.addEventListener('roster', (ev) => {
-      // In "All exams" mode the combined poll drives the view; the SSE stream
-      // still carries only the selected exam, so ignore it.
-      if (state.scope === 'all') return;
-      applyRoster(JSON.parse(ev.data));
-      setConn(true, 'Live');
-    });
-    es.onerror = () => {
-      setConn(false, 'Reconnecting…');
-      startPolling();
-    };
-    es.onopen = () => { stopPolling(); setConn(true, 'Live'); };
-  } catch {
-    startPolling();
-  }
+  const generation = rosterGeneration;
+  let rosterRequestInFlight = false;
+  const refresh = async () => {
+    if (rosterRequestInFlight) return;
+    rosterRequestInFlight = true;
+    const scope = state.scope;
+    try {
+      const roster = await api(scope === 'all' ? '/api/teacher/roster?all=1' : '/api/teacher/roster');
+      if (generation !== rosterGeneration || scope !== state.scope) return;
+      applyRoster(roster);
+      setConn(true, 'Live · polling');
+    } catch {
+      if (generation === rosterGeneration) setConn(false, 'Offline');
+    } finally {
+      rosterRequestInFlight = false;
+    }
+  };
+  refresh();
+  state.poll = setInterval(refresh, 2500);
 }
 
 function disconnect() {
-  state.sse?.close();
-  state.sse = null;
-  stopPolling();
-  stopAllPolling();
-}
-
-function startPolling() {
-  if (state.poll) return;
-  state.poll = setInterval(async () => {
-    try {
-      applyRoster(await api('/api/teacher/roster'));
-      setConn(true, 'Polling');
-    } catch {
-      setConn(false, 'Offline');
-    }
-  }, 2500);
-}
-
-function stopPolling() {
+  rosterGeneration++;
   clearInterval(state.poll);
   state.poll = null;
 }
 
-/* Combined "all exams" monitoring — polls the aggregated roster. */
-function startAllPolling() {
-  if (state.allPoll) return;
-  const fetchAll = async () => {
-    try {
-      applyRoster(await api('/api/teacher/roster?all=1'));
-      setConn(true, 'All exams · live');
-    } catch {
-      setConn(false, 'Offline');
-    }
-  };
-  fetchAll();
-  state.allPoll = setInterval(fetchAll, 2500);
-}
-
-function stopAllPolling() {
-  clearInterval(state.allPoll);
-  state.allPoll = null;
-}
-
 $('#scopeSelect').addEventListener('change', (e) => {
   state.scope = e.target.value;
-  if (state.scope === 'all') {
-    startAllPolling();
-  } else {
-    stopAllPolling();
-    // Refresh the selected exam's roster immediately.
-    api('/api/teacher/roster').then(applyRoster).catch(() => {});
-  }
+  connect();
 });
 
 function setConn(ok, label) {

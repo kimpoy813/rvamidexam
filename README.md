@@ -116,8 +116,7 @@ routed to the exam whose access code they enter.
 
 **Live monitor** — a card per student showing online status, time remaining,
 questions answered, current part, current question number, integrity flags and score
-so far, plus class KPIs and an activity feed that pushes over Server-Sent Events
-(with automatic polling fallback). Several exams can be open at once, each with its
+so far, plus class KPIs and an activity feed refreshed by polling every 2.5 seconds. Several exams can be open at once, each with its
 own access code and timer; switch the **This exam / All exams** scope in the monitor
 to watch every exam in a single combined view — each student is tagged with the exam
 they are writing and each exam gets its own live headcount.
