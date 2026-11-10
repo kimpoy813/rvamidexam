@@ -30,6 +30,13 @@ async function initialize() {
         CREATE TABLE IF NOT EXISTS simple_teacher_tokens (token_hash TEXT PRIMARY KEY, teacher_id TEXT NOT NULL REFERENCES simple_teachers(id) ON DELETE CASCADE, expires_at TIMESTAMPTZ NOT NULL);
         CREATE TABLE IF NOT EXISTS simple_exams (id TEXT PRIMARY KEY, teacher_id TEXT NOT NULL REFERENCES simple_teachers(id), title TEXT NOT NULL, code TEXT UNIQUE NOT NULL, duration INTEGER NOT NULL, questions JSONB NOT NULL, open BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
         CREATE TABLE IF NOT EXISTS simple_attempts (token_hash TEXT PRIMARY KEY, exam_id TEXT NOT NULL REFERENCES simple_exams(id), student_name TEXT NOT NULL, student_no TEXT NOT NULL, answers JSONB NOT NULL DEFAULT '{}'::jsonb, started_at TIMESTAMPTZ NOT NULL DEFAULT now(), deadline TIMESTAMPTZ NOT NULL, submitted_at TIMESTAMPTZ, score INTEGER, total INTEGER);
+        ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS school TEXT NOT NULL DEFAULT '';
+        ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS subject TEXT NOT NULL DEFAULT '';
+        ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS term TEXT NOT NULL DEFAULT '';
+        ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS instructions TEXT NOT NULL DEFAULT '';
+        ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS proctor_notes TEXT NOT NULL DEFAULT '';
+        ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS max_violations INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS auto_submit_on_violations BOOLEAN NOT NULL DEFAULT false;
         ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS results_released BOOLEAN NOT NULL DEFAULT false;
         ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS result_key_hash TEXT;
         CREATE UNIQUE INDEX IF NOT EXISTS simple_attempts_result_key ON simple_attempts(result_key_hash) WHERE result_key_hash IS NOT NULL;
@@ -123,6 +130,7 @@ async function tx(fn) {
   catch (err) { try { await c.query('ROLLBACK'); } catch {} throw err; }
   finally { c.release(); }
 }
+const detailsRevision = e => hash(JSON.stringify([e.school,e.subject,e.term,e.instructions,e.proctor_notes]));
 const bankRevision = exam => hash(JSON.stringify({ title:exam.title, duration:exam.duration, questions:exam.questions, lock_sections:exam.lock_sections, shuffle_questions:exam.shuffle_questions, shuffle_choices:exam.shuffle_choices }));
 const sectionOf = q => q.section?.index ?? 0;
 function sectionInfo(a, index) { return a.questions.find(q => sectionOf(q) === index)?.section || { index:0, title:'Part 1', instructions:'', minutes:0, lock_after:false }; }
@@ -144,7 +152,7 @@ function publicQuestions(a) {
     });
   });
 }
-function attemptState(a) { return { title:a.title, deadline:a.deadline, submitted:!!a.submitted_at, completionReason:a.submitted_at ? a.completion_reason : null, answers:a.answers, questions:publicQuestions(a), currentSection:a.current_section, maxSection:a.max_section, sectionDeadline:sectionDeadline(a,a.current_section), serverTime:a.server_now, controlled:controlled(a), lockSections:a.lock_sections }; }
+function attemptState(a) { return { title:a.title, school:a.school, subject:a.subject, term:a.term, instructions:a.instructions, proctorNotes:a.proctor_notes, deadline:a.deadline, submitted:!!a.submitted_at, completionReason:a.submitted_at ? a.completion_reason : null, answers:a.answers, questions:publicQuestions(a), currentSection:a.current_section, maxSection:a.max_section, sectionDeadline:sectionDeadline(a,a.current_section), serverTime:a.server_now, controlled:controlled(a), lockSections:a.lock_sections }; }
 function mark(q, value, manual) {
   const points = q.points ?? 1;
   if (manual && typeof manual.points === 'number') return { points:manual.points, pending:false };
@@ -158,7 +166,7 @@ function calculate(qs, answers, manual = {}) {
 }
 async function lockAttempt(client, token) {
   if (!/^[\w-]{24,64}$/.test(token)) throw fail(404, 'Attempt not found.');
-  const r = await client.query('SELECT a.*, e.questions, e.title, e.lock_sections, e.shuffle_questions, e.shuffle_choices, clock_timestamp() AS server_now FROM simple_attempts a JOIN simple_exams e ON e.id = a.exam_id WHERE a.token_hash=$1 FOR UPDATE OF a', [hash(token)]);
+  const r = await client.query('SELECT a.*, e.questions, e.title, e.lock_sections, e.shuffle_questions, e.shuffle_choices, e.max_violations, e.auto_submit_on_violations, e.school, e.subject, e.term, e.instructions, e.proctor_notes, clock_timestamp() AS server_now FROM simple_attempts a JOIN simple_exams e ON e.id = a.exam_id WHERE a.token_hash=$1 FOR UPDATE OF a', [hash(token)]);
   if (!r.rows[0]) throw fail(404, 'Attempt not found.');
   const clock = await client.query('SELECT clock_timestamp() AS server_now');
   return { ...r.rows[0], server_now:clock.rows[0].server_now };
@@ -191,13 +199,29 @@ export default async function handler(req, res) {
     if (path === 'simple/login' && method === 'POST') {
       await limit(req, 'login'); const b = await bodyOf(req); const username = String(b.username || '').trim(); const password = String(b.password || '');
       if (username.length > 40 || password.length > 200) throw fail(401, 'Incorrect username or password.');
-      const { rows } = await query('SELECT * FROM simple_teachers WHERE lower(username)=lower($1)', [username]);
-      const salt = rows[0]?.salt || '00000000000000000000000000000000'; const computed = await scrypt(password, salt, 32); const stored = rows[0] ? Buffer.from(rows[0].password_hash, 'hex') : Buffer.alloc(32);
-      if (!rows[0] || stored.length !== computed.length || !crypto.timingSafeEqual(stored, computed)) throw fail(401, 'Incorrect username or password.');
-      const token = crypto.randomBytes(32).toString('base64url'); await query("INSERT INTO simple_teacher_tokens(token_hash, teacher_id, expires_at) VALUES($1,$2,now()+interval '12 hours')", [hash(token), rows[0].id]);
-      return send(res, 200, { token, username: rows[0].username });
+      const token = crypto.randomBytes(32).toString('base64url');
+      const name=await tx(async c=>{
+        const {rows}=await c.query('SELECT * FROM simple_teachers WHERE lower(username)=lower($1) FOR UPDATE',[username]);
+        const salt=rows[0]?.salt || '00000000000000000000000000000000',computed=await scrypt(password,salt,32),stored=rows[0] ? Buffer.from(rows[0].password_hash,'hex') : Buffer.alloc(32);
+        if(!rows[0] || stored.length!==computed.length || !crypto.timingSafeEqual(stored,computed)) throw fail(401,'Incorrect username or password.');
+        await c.query("INSERT INTO simple_teacher_tokens(token_hash, teacher_id, expires_at) VALUES($1,$2,now()+interval '12 hours')",[hash(token),rows[0].id]);return rows[0].username;
+      });
+      return send(res, 200, { token, username:name });
     }
     if (path === 'simple/logout' && method === 'POST') { const t = await teacher(req); await query('DELETE FROM simple_teacher_tokens WHERE token_hash=$1 AND teacher_id=$2', [hash(String(req.headers['x-teacher-token'])), t.id]); return send(res, 200, { ok: true }); }
+    if (path === 'simple/password' && method === 'POST') {
+      await limit(req,'change-password'); const t=await teacher(req),b=await bodyOf(req), current=String(b.current||''), next=String(b.next||'');
+      if(current.length>200 || next.length<10 || next.length>200) throw fail(400,'New password must be 10–200 characters.');
+      await tx(async c=>{
+        const row=(await c.query('SELECT salt,password_hash FROM simple_teachers WHERE id=$1 FOR UPDATE',[t.id])).rows[0];
+        const computed=await scrypt(current,row.salt,32), stored=Buffer.from(row.password_hash,'hex');
+        if(stored.length!==computed.length || !crypto.timingSafeEqual(stored,computed)) throw fail(401,'Current password is incorrect.');
+        const salt=crypto.randomBytes(16).toString('hex'), hashed=(await scrypt(next,salt,32)).toString('hex');
+        await c.query('UPDATE simple_teachers SET salt=$2,password_hash=$3 WHERE id=$1',[t.id,salt,hashed]);
+        await c.query('DELETE FROM simple_teacher_tokens WHERE teacher_id=$1 AND token_hash<>$2',[t.id,hash(String(req.headers['x-teacher-token']))]);
+      });
+      return send(res,200,{ok:true});
+    }
     if (path === 'simple/me' && method === 'GET') return send(res, 200, await teacher(req));
     if (path === 'simple/import-preview' && method === 'POST') {
       await teacher(req);
@@ -218,6 +242,32 @@ export default async function handler(req, res) {
       for (let n = 0; n < 5; n++) { code = crypto.randomBytes(6).toString('hex').toUpperCase(); try { exam = await query('INSERT INTO simple_exams(id,teacher_id,title,code,duration,questions,lock_sections,shuffle_questions,shuffle_choices) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,title,code,duration,open', [id(),t.id,title,code,duration,JSON.stringify(qs),options.lock_sections,options.shuffle_questions,options.shuffle_choices]); break; } catch(e) { if (e.code !== '23505') throw e; } }
       if (!exam) throw fail(503, 'Could not create an access code. Try again.');
       return send(res, 201, exam.rows[0]);
+    }
+    const managerMatch=path.match(/^simple\/exams\/([\w-]+)\/(duplicate|delete|reset-attempts)$/);
+    if(managerMatch && method==='POST') {
+      const t=await teacher(req),examId=managerMatch[1],action=managerMatch[2];
+      if(action==='duplicate') {
+        let copy;
+        for(let n=0;n<5;n++) {
+          try { copy=await tx(async c=>{
+            const r=await c.query('SELECT * FROM simple_exams WHERE id=$1 AND teacher_id=$2 FOR UPDATE',[examId,t.id]);
+            if(!r.rows[0]) throw fail(404,'Exam not found.');const e=r.rows[0];
+            const qs=e.questions.map(q=>({...q,id:id()}));
+            const added=await c.query('INSERT INTO simple_exams(id,teacher_id,title,code,duration,questions,open,lock_sections,shuffle_questions,shuffle_choices,max_violations,auto_submit_on_violations,school,subject,term,instructions,proctor_notes) VALUES($1,$2,$3,$4,$5,$6,false,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id,title,code,duration,open',[id(),t.id,`${e.title.slice(0,143)} (copy)`,crypto.randomBytes(6).toString('hex').toUpperCase(),e.duration,JSON.stringify(qs),e.lock_sections,e.shuffle_questions,e.shuffle_choices,e.max_violations,e.auto_submit_on_violations,e.school,e.subject,e.term,e.instructions,e.proctor_notes]);
+            return added.rows[0];
+          }); break; } catch(e) { if(e.code!=='23505') throw e; }
+        }
+        if(!copy) throw fail(503,'Could not create an access code. Try again.');return send(res,201,copy);
+      }
+      const result=await tx(async c=>{
+        const exam=await c.query('SELECT id FROM simple_exams WHERE id=$1 AND teacher_id=$2 FOR UPDATE',[examId,t.id]);
+        if(!exam.rows[0]) throw fail(404,'Exam not found.');
+        const removed=await c.query('DELETE FROM simple_attempts WHERE exam_id=$1',[examId]);
+        if(action==='delete') await c.query('DELETE FROM simple_exams WHERE id=$1',[examId]);
+        else await c.query('UPDATE simple_exams SET results_released=false WHERE id=$1',[examId]);
+        return {ok:true,removed:removed.rowCount};
+      });
+      return send(res,200,result);
     }
     const bankMatch = path.match(/^simple\/exams\/([\w-]+)\/bank$/);
     if (bankMatch && (method === 'GET' || method === 'POST')) {
@@ -251,6 +301,33 @@ export default async function handler(req, res) {
       });
       return send(res,200,{...exam, revision:bankRevision(exam)});
     }
+    const detailsMatch=path.match(/^simple\/exams\/([\w-]+)\/details$/);
+    if(detailsMatch && (method==='GET' || method==='POST')) {
+      const t=await teacher(req),examId=detailsMatch[1],columns='school,subject,term,instructions,proctor_notes';
+      if(method==='GET'){const r=await query(`SELECT ${columns} FROM simple_exams WHERE id=$1 AND teacher_id=$2`,[examId,t.id]);if(!r.rows[0])throw fail(404,'Exam not found.');return send(res,200,{...r.rows[0],revision:detailsRevision(r.rows[0])});}
+      const b=await bodyOf(req),keys=['school','subject','term','instructions','proctor_notes'];
+      if(!/^[a-f0-9]{64}$/.test(String(b.revision||'')) || keys.some(k=>typeof b[k]!=='string' || b[k].length>(k==='instructions'?10000:200)))throw fail(400,'Invalid exam details.');
+      const result=await tx(async c=>{const r=await c.query(`SELECT ${columns} FROM simple_exams WHERE id=$1 AND teacher_id=$2 FOR UPDATE`,[examId,t.id]);if(!r.rows[0])throw fail(404,'Exam not found.');if(detailsRevision(r.rows[0])!==b.revision)throw fail(409,'These details changed elsewhere. Reload them before saving.');
+        const updated=await c.query(`UPDATE simple_exams SET school=$2,subject=$3,term=$4,instructions=$5,proctor_notes=$6 WHERE id=$1 RETURNING ${columns}`,[examId,...keys.map(k=>b[k].trim())]);return updated.rows[0];});
+      return send(res,200,{...result,revision:detailsRevision(result)});
+    }
+    const regenerateMatch=path.match(/^simple\/exams\/([\w-]+)\/new-code$/);
+    if(regenerateMatch && method==='POST') {
+      const t=await teacher(req);let updated;
+      for(let n=0;n<5;n++)try {updated=await query('UPDATE simple_exams SET code=$3 WHERE id=$1 AND teacher_id=$2 RETURNING code',[regenerateMatch[1],t.id,crypto.randomBytes(6).toString('hex').toUpperCase()]);break;}catch(e){if(e.code!=='23505')throw e;}
+      if(!updated)throw fail(503,'Could not generate a code. Try again.');if(!updated.rows.length)throw fail(404,'Exam not found.');return send(res,200,updated.rows[0]);
+    }
+    if(path==='simple/exam-info' && method==='POST') {
+      await limit(req,'exam-info',300);const b=await bodyOf(req),code=String(b.code||'').trim().toUpperCase();if(!code || code.length>30)throw fail(400,'Enter an exam code.');
+      const r=await query('SELECT title,school,subject,term,instructions,proctor_notes,duration,open,jsonb_array_length(questions) AS question_count FROM simple_exams WHERE code=$1',[code]);if(!r.rows[0])throw fail(404,'Exam code not found.');return send(res,200,r.rows[0]);
+    }
+    const securityMatch=path.match(/^simple\/exams\/([\w-]+)\/integrity-settings$/);
+    if(securityMatch && (method==='GET' || method==='POST')) {
+      const t=await teacher(req), examId=securityMatch[1];
+      if(method==='GET') {const r=await query('SELECT max_violations,auto_submit_on_violations FROM simple_exams WHERE id=$1 AND teacher_id=$2',[examId,t.id]);if(!r.rows[0])throw fail(404,'Exam not found.');return send(res,200,r.rows[0]);}
+      const b=await bodyOf(req);if(!Number.isInteger(b.maxViolations)||b.maxViolations<0||b.maxViolations>500||typeof b.autoSubmit!=='boolean'||(b.autoSubmit && b.maxViolations===0))throw fail(400,'Set a flag limit from 1 to 500 to enable auto-submit (or 0–500 when disabled).');
+      const r=await query('UPDATE simple_exams SET max_violations=$3,auto_submit_on_violations=$4 WHERE id=$1 AND teacher_id=$2 RETURNING max_violations,auto_submit_on_violations',[examId,t.id,b.maxViolations,b.autoSubmit]);if(!r.rows[0])throw fail(404,'Exam not found.');return send(res,200,r.rows[0]);
+    }
     const toggleMatch = path.match(/^simple\/exams\/([\w-]+)\/open$/);
     if (toggleMatch && method === 'POST') {
       const t = await teacher(req); const b = await bodyOf(req);
@@ -258,6 +335,15 @@ export default async function handler(req, res) {
       const r = await query('UPDATE simple_exams SET open=$3 WHERE id=$1 AND teacher_id=$2 RETURNING id,open', [toggleMatch[1],t.id,b.open]);
       if (!r.rows[0]) throw fail(404, 'Exam not found.');
       return send(res,200,r.rows[0]);
+    }
+    if(path==='simple/progress-all' && method==='GET') {
+      const t=await teacher(req);
+      const r=await query(`SELECT a.token_hash AS attempt_id,a.student_name,a.student_no,a.student_class,a.student_section,a.started_at,a.submitted_at,a.deadline,a.last_seen_at,a.score,a.total,a.pending,a.integrity_events,a.completion_reason,a.teacher_actions,e.id AS exam_id,e.title AS exam_title,jsonb_array_length(e.questions) AS question_total,
+        (a.last_seen_at > clock_timestamp() - interval '35 seconds' AND a.submitted_at IS NULL AND a.deadline > clock_timestamp()) AS recently_seen,
+        GREATEST(jsonb_array_length(a.integrity_events)-a.integrity_cleared_count,0) AS integrity_count,
+        (SELECT count(*)::int FROM jsonb_each(a.answers) item WHERE item.value <> '""'::jsonb AND item.value <> '[]'::jsonb AND item.value <> 'null'::jsonb) AS answered
+        FROM simple_attempts a JOIN simple_exams e ON e.id=a.exam_id WHERE e.teacher_id=$1 ORDER BY a.started_at DESC`,[t.id]);
+      return send(res,200,{attempts:r.rows});
     }
     // Progress is a snapshot of saved answers, not evidence that a student is online.
     const progressMatch = path.match(/^simple\/exams\/([\w-]+)\/progress$/);
@@ -372,11 +458,14 @@ export default async function handler(req, res) {
       // Serialize joining against bank edits; no attempt can start with a bank
       // that is being replaced, and no edit can overwrite an existing attempt.
       const duplicate = await tx(async c => {
-        const exam = await c.query('SELECT id,duration FROM simple_exams WHERE code=$1 AND open=true FOR UPDATE', [code]);
+        const exam = await c.query('SELECT id,duration,questions,max_violations,auto_submit_on_violations FROM simple_exams WHERE code=$1 AND open=true FOR UPDATE', [code]);
         if (!exam.rows[0]) throw fail(404, 'Exam not found or closed.');
-        const existing=await c.query("SELECT token_hash FROM simple_attempts WHERE exam_id=$1 AND lower(trim(student_no))=lower(trim($2)) AND submitted_at IS NULL AND deadline > clock_timestamp() ORDER BY started_at DESC LIMIT 1 FOR UPDATE",[exam.rows[0].id,no]);
+        const existing=await c.query("SELECT * FROM simple_attempts WHERE exam_id=$1 AND lower(trim(student_no))=lower(trim($2)) AND submitted_at IS NULL AND deadline > clock_timestamp() ORDER BY started_at DESC LIMIT 1 FOR UPDATE",[exam.rows[0].id,no]);
         if(existing.rows.length) {
-          await c.query(`UPDATE simple_attempts SET integrity_events=integrity_events || jsonb_build_array(jsonb_build_object('type','duplicate_join','at',clock_timestamp())) WHERE token_hash=$1 AND jsonb_array_length(integrity_events)<500`,[existing.rows[0].token_hash]);
+          const event=await c.query(`UPDATE simple_attempts SET integrity_events=integrity_events || jsonb_build_array(jsonb_build_object('type','duplicate_join','at',clock_timestamp())) WHERE token_hash=$1 AND jsonb_array_length(integrity_events)<500 RETURNING GREATEST(jsonb_array_length(integrity_events)-integrity_cleared_count,0) AS n`,[existing.rows[0].token_hash]);
+          if(event.rows.length && exam.rows[0].auto_submit_on_violations && exam.rows[0].max_violations>0 && event.rows[0].n>=exam.rows[0].max_violations){
+            await finalize(c,{...existing.rows[0],questions:exam.rows[0].questions});await c.query("UPDATE simple_attempts SET completion_reason='integrity_limit' WHERE token_hash=$1",[existing.rows[0].token_hash]);
+          }
           return true;
         }
         await c.query("INSERT INTO simple_attempts(token_hash,exam_id,student_name,student_no,started_at,deadline,order_seed,section_starts,student_class,student_section,result_key_hash) VALUES($1,$2,$3,$4,clock_timestamp(),clock_timestamp()+($5 * interval '1 minute'),$6,jsonb_build_object('0',extract(epoch from clock_timestamp()) * 1000),$7,$8,$9)", [hash(token),exam.rows[0].id,name,no,exam.rows[0].duration,crypto.randomInt(1,2**31),studentClass,studentSection,hash(resultKey)]);
@@ -399,8 +488,13 @@ export default async function handler(req, res) {
         }
         if (action === 'integrity') {
           if (!['copy','cut','paste','second_tab','tab_hidden'].includes(b.type)) throw fail(400,'Invalid integrity event.');
-          if (!a.submitted_at) await c.query(`UPDATE simple_attempts SET integrity_events=integrity_events || jsonb_build_array(jsonb_build_object('type',$2::text,'at',clock_timestamp())) WHERE token_hash=$1 AND jsonb_array_length(integrity_events)<500`,[a.token_hash,b.type]);
-          return {ok:true};
+          if (!a.submitted_at) {
+            const event=await c.query(`UPDATE simple_attempts SET integrity_events=integrity_events || jsonb_build_array(jsonb_build_object('type',$2::text,'at',clock_timestamp())) WHERE token_hash=$1 AND jsonb_array_length(integrity_events)<500 RETURNING GREATEST(jsonb_array_length(integrity_events)-integrity_cleared_count,0) AS n`,[a.token_hash,b.type]);
+            if(event.rows.length && a.auto_submit_on_violations && a.max_violations>0 && event.rows[0].n>=a.max_violations){
+              a=await finalize(c,a);await c.query("UPDATE simple_attempts SET completion_reason='integrity_limit' WHERE token_hash=$1",[a.token_hash]);
+            }
+          }
+          return {ok:true,submitted:!!a.submitted_at};
         }
         if (action === 'answer') {
           if (a.submitted_at) return { answerClosed:true };

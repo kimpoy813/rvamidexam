@@ -485,7 +485,18 @@ are capped at 500 per attempt and may be lost if the network is unavailable.
    The Questions tab can load and edit the selected exam before any student
    has joined. Once an attempt exists, its bank is locked to protect saved
    answers and results; create a new exam instead. The editor warns about
-   concurrent edits rather than silently overwriting them. The question bank
+   concurrent edits rather than silently overwriting them. The Exam setup tab
+   supports editing school, subject, term, student instructions and entry notes,
+   regenerating an access code, duplicating exams (copies start closed), permanently deleting an
+   exam, clearing attempts, and changing the teacher password. Clearing attempts
+   removes responses and result keys and hides released scores; back up/export
+   first. Regenerating the code invalidates the old code for both exam entry and
+   result lookup; share the new code. Password changes sign out other teacher sessions. The monitor can show
+   all exams owned by that teacher.
+   Integrity auto-submit is optional and off by default. A teacher can set a
+   limit of up to 500 events; only saved answers are submitted when it is
+   reached. Browser checks may be unreliable, and settings affect future events
+   rather than retrospectively submitting attempts. The question bank
    offers a Render-style part and answer preview, inline editors, and saved
    text reload. Pasted text must be previewed before saving. Part timer and
    locking settings are retained when previewed parts keep their names and
