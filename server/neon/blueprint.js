@@ -50,7 +50,7 @@ export function previewOriginalImport(text) {
   if (!sections.some(s => s.questions.length)) throw invalid('No questions found.');
   const warnings = [...(parsed.warnings || [])];
   sections.forEach((s, i) => s.questions.forEach((q, j) => {
-    if (q.kind !== 'essay' && q.answer === null) warnings.push(`Part ${i + 1}, question ${j + 1} has no answer key and requires manual grading.`);
+    if (q.kind !== 'essay' && q.answer === null) warnings.push(`Part ${i + 1}, question ${j + 1} has no answer key; add one before saving for automatic grading (otherwise it requires manual grading).`);
   }));
   return { title:String(parsed.title || 'Imported Exam'), titleExplicit:!!parsed.titleExplicit, sections, warnings };
 }

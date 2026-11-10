@@ -23,9 +23,10 @@ test('Vercel API preserves parts and all question types through answers and grad
       {kind:'essay',prompt:'Explain',choices:[],answer:null,points:5}
     ]}];
     const preview=await call('import-preview',{text:JSON.stringify({title:'Types',sections})},teacher); assert.equal(preview.status,200); assert.equal(preview.data.sections.length,2);
+    for (const kind of ['mcq','multiselect','truefalse','short']) {const choices=kind==='short'?[]:kind==='truefalse'?['True','False']:['A','B'];const bad=await call('exams',{title:'Missing key',duration:10,sections:[{title:'P',questions:[{kind,prompt:'Question',choices,answer:null}]}]},teacher);assert.equal(bad.status,400);assert.match(bad.data.error,/answer key/);}
     const created=await call('exams',{title:'Types',duration:10,sections:preview.data.sections},teacher); assert.equal(created.status,201,JSON.stringify(created.data));
     const bank=await call(`exams/${created.data.id}/bank`,undefined,teacher); assert.equal(bank.data.questions.length,5);
-    const joined=await call('join',{code:created.data.code,name:'Student One',number:'001'}); const token=joined.data.token; const resultLookup={code:created.data.code,number:'001',resultKey:joined.data.resultKey};
+    const joined=await call('join',{code:created.data.code,name:'Student One',number:'001'}); const token=joined.data.token; const resultLookup={code:created.data.code,number:'001'};
     const attempt=await call('attempt',undefined,undefined,token); const qs=attempt.data.questions; assert.equal(qs[0].section.title,'Part One'); assert.equal(qs[3].section.instructions,'Write answers'); assert.ok(!JSON.stringify(qs).includes('"answer"'));
     const values=[1,[0,2],0,'Hello','My essay'];
     assert.ok((await Promise.all(qs.map((q,i)=>call('attempt/answer',{questionId:q.id,answer:values[i]},undefined,token)))).every(r=>r.status===200));
@@ -54,7 +55,7 @@ test('Vercel API preserves parts and all question types through answers and grad
     assert.equal((await act('invalidate')).status,200);after=(await call(`exams/${created.data.id}/results`,undefined,teacher)).data;assert.equal(after.results[0].completion_reason,'invalidated');assert.equal((await call('result-lookup',resultLookup)).status,404);assert.equal(after.analysis[0].answered,0);
     assert.equal((await act('invalidate')).status,409);
     const parallel=await call('join',{code:created.data.code,name:'Student One',number:'001'});assert.equal(parallel.status,201);
-    assert.equal((await act('reopen')).status,409);await call('attempt/submit',{},undefined,parallel.data.token);
+    assert.equal((await call('result-lookup',resultLookup)).status,404);assert.equal((await act('reopen')).status,409);await call('attempt/submit',{},undefined,parallel.data.token);assert.equal((await call('result-lookup',resultLookup)).data.score,0);
     assert.equal((await act('reopen')).status,200);
     const late=await call('join',{code:created.data.code,name:'Late Student',number:'002'}); const lp=(await call('attempt',undefined,undefined,late.data.token)).data;
     await call('attempt/answer',{questionId:lp.questions[4].id,answer:'Late essay'},undefined,late.data.token);

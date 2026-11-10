@@ -159,3 +159,39 @@
 .flag-chip .action-icon { width:14px; height:14px; }
 @media (max-width:720px) { #dashboard .tab { gap:6px; } }
 #next .action-icon, #startExam .action-icon { order:1; }
+
+/* Render-style dashboard tables, kept scrollable on narrow screens. */
+.neon-exams-table, .neon-results-table, .neon-analysis-table { border:0; border-radius:0; }
+.neon-exams-table table { min-width:960px; }
+.neon-results-table table { min-width:920px; }
+.neon-analysis-table table { min-width:760px; }
+.exam-current { margin-left:8px; vertical-align:middle; }
+.exam-table-actions { display:flex; flex-wrap:wrap; gap:5px; min-width:390px; }
+.score-row:hover, .exam-table-row:hover { background:#f8faff; }
+.result-review > td { padding:18px 22px; background:var(--surface-2); }
+.result-review details { margin:8px 0; }
+.result-review ol, .result-review ul { padding-left:22px; }
+.result-review li { padding:7px 0; overflow-wrap:anywhere; }
+.result-review li label { display:inline-flex; align-items:center; gap:6px; margin:8px 8px 0 0; }
+.analysis-question { min-width:220px; max-width:430px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.difficulty-row { display:flex; align-items:center; gap:8px; min-width:180px; }
+.difficulty-row .bar { flex:1; min-width:60px; }
+.difficulty-row .tiny { white-space:nowrap; }
+/* Student actions stay readable within the roster rather than overflowing it. */
+.neon-roster-row .teacher-actions, .result-review .teacher-actions { min-width:0; width:100%; padding-top:8px; border-top:1px solid var(--line-2); }
+.teacher-actions summary { list-style:none; display:inline-flex; align-items:center; gap:7px; min-height:36px; padding:6px 10px !important; border:1px solid var(--line); border-radius:9px; background:var(--surface); }
+.teacher-actions summary::-webkit-details-marker { display:none; }
+.teacher-actions summary::before { content:'+'; font-size:16px; line-height:1; }
+.teacher-actions[open] summary::before { content:'−'; }
+.teacher-actions .row { display:flex; flex-wrap:wrap; min-width:0; margin:8px 0 2px; }
+.teacher-actions .row .btn { white-space:normal; text-align:center; }
+@media (max-width:640px) {
+  .neon-roster-row .teacher-actions, .neon-roster-row .roster-events { grid-column:1 / -1; }
+  .teacher-actions summary { min-height:44px; }
+  .teacher-actions .row .btn { flex:1 1 130px; min-height:44px; }
+}
+.result-lookup-panel { margin:20px auto 0; max-width:390px; text-align:left; border:1px solid var(--line); border-radius:14px; padding:14px 16px; background:var(--surface-2); }
+.result-lookup-panel summary { cursor:pointer; font-weight:700; color:var(--brand-dark); }
+.result-lookup-panel p { margin-top:8px; }
+.result-lookup-panel form { margin-top:12px; }
+.result-lookup-panel button { margin-top:12px; }
