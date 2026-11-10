@@ -51,12 +51,6 @@ let pendingSaveNotice = '';
 /* ==================================================================== auth */
 
 async function init() {
-  // Only show the "Default: teacher / rvm-exam-2026" hint while that default
-  // password is actually still in use.
-  api('/api/public/auth-hint').then((hint) => {
-    $('#defaultHint').classList.toggle('hidden', !hint.showDefaultHint);
-  }).catch(() => {});
-
   if (!localStorage.getItem('rvm_teacher_token')) return showLogin();
   try {
     const me = await api('/api/teacher/me');

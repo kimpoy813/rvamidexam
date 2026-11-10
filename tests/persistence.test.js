@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import net from 'node:net';
@@ -158,5 +159,45 @@ test('exam setup survives a full server stop and restart', { timeout: 25_000 }, 
     if (first) await stop(first).catch(() => first.child.kill('SIGKILL'));
     if (second) await stop(second).catch(() => second.child.kill('SIGKILL'));
     rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+
+test('Render refuses a missing or unmounted persistent disk instead of creating defaults', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'rvm-no-mount-'));
+  try {
+    for (const mode of ['persistent', '']) {
+      const result = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/index.js'], {
+        cwd: ROOT,
+        env: { ...process.env, RENDER: 'true', EXAM_DATA_DIR: dir,
+          EXAM_DB: path.join(dir, 'test.sqlite'), EXAM_STORAGE_MODE: mode, EXAM_ALLOW_EPHEMERAL: '' },
+        encoding: 'utf8', timeout: 5000
+      });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /persistent disk/i);
+      assert.equal(result.signal, null);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an intentionally empty question bank stays empty after restart', { timeout: 25000 }, async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'rvm-empty-bank-'));
+  let first, second;
+  try {
+    first = launch(dir, await freePort());
+    await first.ready;
+    await stop(first);
+    const db = new DatabaseSync(path.join(dir, 'restart.sqlite'));
+    db.exec('DELETE FROM questions; DELETE FROM sections;');
+    db.close();
+    const port = await freePort();
+    second = launch(dir, port);
+    await second.ready;
+    const info = await request(`http://127.0.0.1:${port}`, '/api/public/exam-info');
+    assert.equal(info.totalQuestions, 0);
+  } finally {
+    if (first) await stop(first).catch(() => first.child.kill('SIGKILL'));
+    if (second) await stop(second).catch(() => second.child.kill('SIGKILL'));
+    rmSync(dir, { recursive: true, force: true });
   }
 });

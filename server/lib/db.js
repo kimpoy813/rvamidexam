@@ -20,9 +20,37 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(__dirname, '..', '..');
 export const DATA_DIR = process.env.EXAM_DATA_DIR || path.join(ROOT, 'data');
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
-
 export const DB_PATH = process.env.EXAM_DB || path.join(DATA_DIR, 'exam.sqlite');
+
+// On Render, never silently initialize a new database on an ephemeral root
+// filesystem when durable storage was expected. An explicit opt-in exists for
+// disposable demos only; it cannot provide persistence.
+if (process.env.RENDER === 'true' || process.env.RENDER_SERVICE_ID) {
+  if (process.env.EXAM_STORAGE_MODE !== 'persistent') {
+    if (process.env.EXAM_ALLOW_EPHEMERAL !== 'true') {
+      throw new Error('Render requires a persistent disk. Set EXAM_DATA_DIR and EXAM_STORAGE_MODE=persistent, or EXAM_ALLOW_EPHEMERAL=true for a disposable demo.');
+    }
+  } else {
+    const dataPath = path.resolve(DATA_DIR);
+    const dbPath = path.resolve(DB_PATH);
+    const relative = path.relative(dataPath, dbPath);
+    if (!relative || relative.startsWith('..' + path.sep) || relative === '..' || path.isAbsolute(relative)) {
+      throw new Error('EXAM_DB must be inside the persistent EXAM_DATA_DIR.');
+    }
+    let mounts;
+    try {
+      mounts = fs.readFileSync('/proc/self/mountinfo', 'utf8').split('\n')
+        .map(line => line.split(' ')[4]?.replace(/\\([0-7]{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8))));
+    } catch {
+      throw new Error('Cannot verify the Render persistent disk mount.');
+    }
+    if (!mounts.includes(dataPath)) {
+      throw new Error(`Persistent disk is not mounted at EXAM_DATA_DIR (${dataPath}); refusing to create a temporary database.`);
+    }
+  }
+}
+
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
 export const db = new DatabaseSync(DB_PATH);
 

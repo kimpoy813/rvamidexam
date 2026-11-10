@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  db, getSettings, setSettings, ensureTeacher, verifyTeacher, makeAccessCode,
+  db, getSettings, setSettings, ensureTeacher, makeAccessCode,
   getExamBlueprint, replaceExam, now, ensureExamExists, getCurrentExamId, listExams,
   checkpointDatabase, getStorageInfo
 } from './lib/db.js';
@@ -26,21 +26,19 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 function bootstrap() {
   const username = process.env.EXAM_TEACHER_USER || 'teacher';
-  const generated = !process.env.EXAM_TEACHER_PASSWORD;
   const password = process.env.EXAM_TEACHER_PASSWORD || 'rvm-exam-2026';
   ensureTeacher(username, password);
-  // True only while the teacher is still signing in with the well-known
-  // default password — once they change it in the dashboard this flips off,
-  // so the startup banner stops advertising a password that no longer works.
-  const defaultPasswordActive = verifyTeacher(username, password);
-
+  // Seed only a genuinely new store, never an existing or migrated empty bank.
+  const fresh = db.prepare("SELECT COUNT(*) AS n FROM exams").get().n === 0
+    && db.prepare("SELECT COUNT(*) AS n FROM sections").get().n === 0
+    && db.prepare("SELECT COUNT(*) AS n FROM settings WHERE key NOT IN ('storage_id', 'current_exam_id')").get().n === 0;
   const examId = ensureExamExists();
-  if (!getExamBlueprint(examId).length) {
+  if (fresh) {
     replaceExam(SAMPLE_EXAM, examId);
     console.log('[exam] No question bank found — loaded the sample exam.');
   }
 
-  return { username, password, generated, defaultPasswordActive };
+  return { username };
 }
 
 const creds = bootstrap();
@@ -125,11 +123,7 @@ server.listen(PORT, HOST, () => {
   const storage = getStorageInfo();
   console.log(`  Storage      ${storage.durable ? 'persistent' : 'EPHEMERAL — SETUP WILL RESET'} (${storage.mode})`);
   if (storage.warning) console.warn(`  WARNING      ${storage.warning}`);
-  if (creds.defaultPasswordActive) {
-    console.log(`  Teacher      ${creds.username} / ${creds.password}${creds.generated ? '  (default — change it in the dashboard)' : ''}`);
-  } else {
-    console.log(`  Teacher      ${creds.username} (a custom password is in use)`);
-  }
+  console.log(`  Teacher      ${creds.username} (sign in at /teacher)`);
   console.log('');
 });
 

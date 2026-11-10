@@ -398,8 +398,16 @@ sample defaults. On Render's free plan there is no persistent disk, so keeping
 SQLite data across deploys requires upgrading or moving the database to an
 external durable service.
 
-Until the password is changed, the sign-in page and the startup banner show the
-default credentials; once you change it they stop advertising it.
+The teacher login is available directly at `/teacher`, without a link on the
+student page. Hiding the link does not secure it: set a strong
+`EXAM_TEACHER_PASSWORD` before first startup, or change the existing password
+in the dashboard. Environment credentials only initialize a new database.
+
+On Render the app refuses to start if persistent storage is not configured, or
+if the configured data directory is not a mounted disk. This prevents silently
+creating a fresh database on an ephemeral filesystem. For disposable demos
+only, set `EXAM_ALLOW_EPHEMERAL=true`; all data can still be lost. Attaching a
+disk cannot recover data already lost from the old ephemeral filesystem.
 
 ## Configuration
 
@@ -409,6 +417,7 @@ default credentials; once you change it they stop advertising it.
 | `HOST` | `0.0.0.0` | bind address |
 | `EXAM_DATA_DIR` | `./data` | where the database lives (point this at a persistent disk on Render) |
 | `EXAM_DB` | `$EXAM_DATA_DIR/exam.sqlite` | database path |
-| `EXAM_STORAGE_MODE` | _(local disk)_ | set to `persistent` when the hosted data path is an attached durable disk; drives the dashboard deployment check |
+| `EXAM_STORAGE_MODE` | _(local disk)_ | set to `persistent` when the hosted data path is an attached durable disk |
+| `EXAM_ALLOW_EPHEMERAL` | _(unset)_ | set to `true` to allow disposable Render deployments without a disk (data can be lost) |
 | `EXAM_TEACHER_USER` | `teacher` | teacher username |
 | `EXAM_TEACHER_PASSWORD` | `rvm-exam-2026` | teacher password used at first boot only |
