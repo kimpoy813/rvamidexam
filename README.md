@@ -446,15 +446,26 @@ deterministic per-student question and choice shuffling. Scores with ungraded
 answers are provisional.
 Existing multiple-choice exams and results use the same `simple_*` tables.
 
-This is **not full parity** with the original app: live presence/proctoring,
-SQLite data migration and some other settings are not implemented. Each part must contain a question. The
-progress snapshot does not show whether students are online. Student scores are
-not returned by the student API; teachers can share results outside the app (an
-in-app release feature is not implemented). Students cannot resume on another
+This is **not full parity** with the original app: SQLite data migration and
+some proctoring and other settings are not implemented. Each part must contain
+a question. The live monitor shows recent heartbeats, searchable and filterable students,
+integrity counts, and a polling-based activity feed. Results include a score
+distribution, item analysis, and CSV export. Statistics exclude provisional
+scores and use assessed, answered items for correctness rates. A
+heartbeat is not proof a student is attentive, and connectivity gaps are not
+proof of misconduct. Scores are hidden by default. Teachers can release or hide
+scores for an exam from Results. Once released, a student can check a submitted,
+non-invalidated attempt using the exam code, student number, and the private
+result key shown after submission. A released score with pending manual grading
+is labeled provisional. Hiding scores cannot undo a result already seen or saved.
+Students must save their private key; it is not recoverable without the original
+attempt session, so a teacher may need to share the score separately. Older
+attempts can obtain a key only if their original session token is still available.
+Students cannot resume on another
 device or after closing the original tab. An active duplicate join using the same
 exam and student number is rejected and logged; students must contact their
 teacher if they lose the original tab. Copy/cut/paste are blocked in the exam
-page and logged, and same-attempt tabs are detected where BroadcastChannel is
+page and logged; leaving the exam tab is recorded and shows a warning; same-attempt tabs are detected where BroadcastChannel is
 available. Teachers can review logged events in Results. Browser restrictions
 and duplicate detection are best effort: different student numbers, browser
 profiles, devices, offline failures, or modified clients can bypass them. Events
@@ -488,6 +499,14 @@ are capped at 500 per attempt and may be lost if the network is unavailable.
    if section locking is enabled. The overall deadline still applies. Expired
    attempts are scored on the next student request or when the teacher opens
    results, rather than by a background timer.
+   Teachers can add 10 or 30 minutes to an active attempt, submit saved answers,
+   invalidate, reopen a submitted attempt, or clear current flags. Actions are
+   recorded in the result's history (up to 500 actions per attempt); clearing
+   flags preserves integrity-event history. Invalidated attempts are excluded
+   from score statistics. Reopening preserves answers and section restrictions,
+   clears manual grades, and gives at least one minute overall; it does not
+   reset expired part timers. The student must keep the original tab and use
+   “Check if reopened.” Added time extends only the overall exam deadline.
 4. Test with a small class before relying on it, monitor Neon/Vercel free-tier
    quotas, and make independent database backups. Free services have usage and
    availability limits. Registration is open; there is no email verification or

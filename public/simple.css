@@ -46,3 +46,14 @@
 #editors .bp-editor button, #editors .bp-section-editor button { margin:12px 8px 0 0; }
 #examSettings { margin:12px 0; }
 #examSettings summary { cursor:pointer; color:var(--brand-dark); font-weight:650; }
+.monitor-kpis { grid-template-columns:repeat(7,minmax(0,1fr)); }
+.results-kpis { grid-template-columns:repeat(6,minmax(0,1fr)); }
+.monitor-head { flex-wrap:wrap; gap:8px; }
+.monitor-head input, .monitor-head select { width:auto; max-width:210px; padding:7px 10px; font-size:13px; }
+.neon-monitor-note { padding:10px 18px 0; }
+@media (max-width:1100px) { #dashboard .monitor-kpis, #dashboard .results-kpis { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media (max-width:720px) { #dashboard .monitor-kpis, #dashboard .results-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); } .monitor-head input { flex:1 1 150px; } }
+.teacher-actions { flex-basis:100%; font-size:12px; }
+.teacher-actions summary { cursor:pointer; color:var(--brand-dark); font-weight:650; }
+.teacher-actions .row { margin-top:8px; gap:6px; }
+.result-key { font-family:var(--mono); font-size:17px; font-weight:700; overflow-wrap:anywhere; margin:12px 0; }

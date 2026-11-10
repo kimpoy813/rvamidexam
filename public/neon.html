@@ -11,9 +11,10 @@
       <li><b>Your exam is timed.</b> The timer starts when you enter and continues if you refresh the page.</li>
       <li><b>Answers save automatically.</b> Wait for the saved message after choosing an answer.</li>
       <li><b>Navigation rules vary.</b> Your teacher may lock parts or set separate part timers.</li>
+      <li><b>Stay on the exam tab.</b> Leaving it is recorded and reported to your teacher.</li>
       <li><b>No copying or pasting.</b> Copy, cut, and paste are blocked and recorded during the exam.</li>
       <li><b>One device, one tab.</b> A second opening may be detected and recorded. Refresh in the original tab to resume.</li>
-      <li><b>Scores are not shown on screen.</b> Your teacher will release the results.</li>
+      <li><b>Scores are hidden until released.</b> Save your private result key after submitting to check later.</li>
     </ul></div>
   </section>
   <section class="card entry-panel"><div class="card-pad"><div class="panel-kicker"><span class="panel-kicker-dot"></span> Student check-in</div><h2>Ready to begin?</h2><p class="muted small" style="margin-top:5px">Enter your details below. Your teacher will provide the access code.</p>
@@ -23,6 +24,7 @@
     <div class="field"><label for="studentClass">Class</label><input id="studentClass" type="text" required maxlength="80" placeholder="e.g. Grade 10"></div>
     <div class="field"><label for="studentSection">Section</label><input id="studentSection" type="text" required maxlength="80" placeholder="e.g. A"></div>
     <button type="submit" class="btn btn-primary btn-lg btn-block" style="margin-top:20px">Start examination</button></form></div>
+    <details class="card-pad"><summary>Check released results</summary><p class="tiny muted">Enter your exam code, student number, and the private result key shown after your exam.</p><form id="resultLookup" style="margin-top:12px"><div class="field"><label for="resultCode">Exam access code</label><input id="resultCode" required maxlength="30" autocomplete="off"></div><div class="field"><label for="resultNumber">Student number</label><input id="resultNumber" required maxlength="40" autocomplete="off"></div><div class="field"><label for="resultKeyInput">Private result key</label><input id="resultKeyInput" required maxlength="22" autocomplete="off" spellcheck="false"></div><button class="btn btn-soft" type="submit" style="margin-top:12px">Check score</button><p id="lookupResult" role="status" aria-live="polite" style="margin-top:10px"></p></form></details>
     <div class="entry-foot"><span class="tiny muted">Your responses are saved to your teacher's exam.</span></div></section>
 </div></main>
 <div id="exam" class="hidden">
@@ -31,5 +33,6 @@
   <main><section class="qcard"><div class="qcard-head"><span class="qchip" id="qChip">Question</span><span class="qpoints" id="qPoints">1 point</span></div><div class="qbody" id="questions"></div><div class="qfoot"><button class="btn btn-ghost" id="prev" type="button">← Previous</button><span class="tiny muted" id="position"></span><button class="btn btn-primary" id="next" type="button">Next →</button></div></section></main></div>
   <div class="dock"><div class="dock-in"><span class="save-state" id="save" role="status" aria-live="polite">Answers are saved automatically.</span><div class="spacer"></div><button class="btn btn-primary" id="submit" type="button">Submit examination</button></div></div>
 </div>
-<main class="shell shell-narrow hidden" id="result"><section class="card result-hero"><div class="brand-mark neon-result-mark">✓</div><h1>Exam submitted</h1><p id="score" style="margin-top:12px"></p><p class="muted" style="margin-top:8px">You can close this page.</p></section></main>
+<div class="veil hidden" id="integrityVeil" role="dialog" aria-modal="true" aria-labelledby="integrityTitle" aria-describedby="integrityBody"><div class="veil-card"><h2 id="integrityTitle">Return to the exam</h2><p class="muted" id="integrityBody" style="margin-top:8px"></p><button class="btn btn-primary btn-lg btn-block" id="integrityContinue" type="button" style="margin-top:20px">Continue exam</button></div></div>
+<main class="shell shell-narrow hidden" id="result"><section class="card result-hero"><div class="brand-mark neon-result-mark">✓</div><h1>Exam submitted</h1><p id="score" style="margin-top:12px"></p><p class="small" style="margin-top:12px">Save this private result key. You will need it with your exam code and student number to check a released score later:</p><p id="resultKeyDisplay" class="result-key" aria-live="polite"></p><button id="copyResultKey" type="button" class="btn btn-ghost btn-sm">Copy result key</button><p class="muted" style="margin-top:8px">Keep this tab if your teacher may reopen the attempt.</p><button id="checkReopen" type="button" class="btn btn-soft" style="margin-top:16px">Check if reopened</button> <button id="newAttempt" type="button" class="btn btn-ghost" style="margin-top:16px">Leave result</button></section></main>
 <div id="message" class="neon-alert hidden" role="alert"></div><script type="module" src="/neon-student.js"></script></body></html>
