@@ -1,0 +1,52 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import {once} from 'node:events';
+import crypto from 'node:crypto';
+import pg from 'pg';
+const url=process.env.TEST_DATABASE_URL;
+test('server enforces part locks and deadlines and shuffles papers deterministically',{skip:!url,timeout:30000},async()=>{
+  const schema='test_'+crypto.randomBytes(8).toString('hex'),admin=new pg.Client({connectionString:url});await admin.connect();await admin.query(`CREATE SCHEMA "${schema}"`);
+  const conn=new URL(url);conn.searchParams.set('options',`-csearch_path=${schema}`);process.env.DATABASE_URL=conn.toString();
+  const {default:handler,closeTestPool}=await import('../api/handler.js');const server=http.createServer(handler);server.listen(0,'127.0.0.1');await once(server,'listening');const base=`http://127.0.0.1:${server.address().port}/api/simple/`;
+  const call=async(path,body,teacher,student)=>{const r=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...(teacher?{'X-Teacher-Token':teacher}:{}),...(student?{'X-Exam-Token':student}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});return {status:r.status,data:await r.json()};};
+  try {
+    await call('register',{username:'timing_teacher',password:'long-strong-password'});const teacher=(await call('login',{username:'timing_teacher',password:'long-strong-password'})).data.token;
+    const question=n=>({kind:'mcq',prompt:`Question ${n}`,points:1,choices:['A','B','C','D'],answer:'B',shuffle:true});
+    const sections=[{title:'First',instructions:'First instructions',minutes:1,lock_after:true,questions:Array.from({length:5},(_,i)=>question(i))},{title:'Second',minutes:1,lock_after:true,questions:[question(6)]},{title:'Third',minutes:0,lock_after:true,questions:[question(7)]}];
+    const created=await call('exams',{title:'Timing',duration:10,sections,lock_sections:true,shuffle_questions:true,shuffle_choices:true},teacher); assert.equal(created.status,201,JSON.stringify(created.data));
+    const bank=await call(`exams/${created.data.id}/bank`,undefined,teacher);assert.equal(bank.data.lock_sections,true);assert.equal(bank.data.shuffle_choices,true);assert.equal(bank.data.questions[0].section.minutes,1);
+    const joined=await call('join',{code:created.data.code,name:'Student One',number:'001'});const token=joined.data.token,digest=crypto.createHash('sha256').update(token).digest('hex');
+    await admin.query(`UPDATE "${schema}".simple_attempts SET order_seed=1 WHERE token_hash=$1`,[digest]);
+    const first=(await call('attempt',undefined,undefined,token)).data;const again=(await call('attempt',undefined,undefined,token)).data;
+    assert.deepEqual(first.questions,again.questions);assert.ok(first.sectionDeadline);assert.equal(first.currentSection,0);assert.equal(first.questions[0].section.instructions,'First instructions');
+    for(const q of first.questions) {const source=bank.data.questions.find(x=>x.id===q.id); assert.deepEqual(q.choices,q.choiceKeys.map(k=>source.choices[k]));}
+    await admin.query(`UPDATE "${schema}".simple_attempts SET order_seed=2 WHERE token_hash=$1`,[digest]);
+    const different=(await call('attempt',undefined,undefined,token)).data;assert.notDeepEqual(different.questions.map(q=>q.id),first.questions.map(q=>q.id));
+    const q0=different.questions.find(q=>q.section.index===0),q1=different.questions.find(q=>q.section.index===1),q2=different.questions.find(q=>q.section.index===2);
+    assert.equal((await call('attempt/answer',{questionId:q1.id,answer:1},undefined,token)).status,403);
+    assert.equal((await call('attempt/answer',{questionId:q0.id,answer:1},undefined,token)).status,200);
+    const nav=await call('attempt/navigate',{section:1},undefined,token);assert.equal(nav.status,200);assert.equal(nav.data.currentSection,1);assert.ok(nav.data.sectionDeadline);
+    assert.equal((await call('attempt/navigate',{section:0},undefined,token)).status,403);
+    assert.equal((await call('attempt/answer',{questionId:q0.id,answer:1},undefined,token)).status,403);
+    await admin.query(`UPDATE "${schema}".simple_attempts SET section_starts=jsonb_set(section_starts,'{1}',to_jsonb((extract(epoch from clock_timestamp())*1000-61000)::bigint)) WHERE token_hash=$1`,[digest]);
+    assert.equal((await call('attempt/answer',{questionId:q1.id,answer:1},undefined,token)).status,409);
+    assert.equal((await call('attempt/navigate',{section:2},undefined,token)).status,200);
+    assert.equal((await call('attempt/navigate',{section:1},undefined,token)).status,403);
+    assert.equal((await call('attempt/answer',{questionId:q2.id,answer:1},undefined,token)).status,200);
+    const submitted=await call('attempt/submit',{},undefined,token);assert.equal(submitted.data.score,2);assert.equal(submitted.data.total,7);
+    const unlocked=(await call('exams',{title:'Timer only',duration:10,sections,lock_sections:false,shuffle_questions:false,shuffle_choices:false},teacher)).data;
+    const other=(await call('join',{code:unlocked.code,name:'Student Two',number:'002'})).data.token,otherDigest=crypto.createHash('sha256').update(other).digest('hex');
+    const timed=(await call('attempt',undefined,undefined,other)).data;const initialDeadline=timed.sectionDeadline;
+    assert.equal((await call('attempt/navigate',{section:1},undefined,other)).status,200);
+    assert.equal((await call('attempt/navigate',{section:0},undefined,other)).data.sectionDeadline,initialDeadline,'returning cannot restart the timer');
+    const locker=new pg.Client({connectionString:conn.toString()});await locker.connect();await locker.query('BEGIN');
+    await locker.query('SELECT token_hash FROM simple_attempts WHERE token_hash=$1 FOR UPDATE',[otherDigest]);
+    const waiting=call('attempt/answer',{questionId:timed.questions[0].id,answer:1},undefined,other);
+    await new Promise(resolve=>setTimeout(resolve,100));
+    await locker.query("UPDATE simple_attempts SET section_starts=jsonb_set(section_starts,'{0}',to_jsonb((extract(epoch from clock_timestamp())*1000-61000)::bigint)) WHERE token_hash=$1",[otherDigest]);
+    await locker.query('COMMIT');await locker.end();
+    assert.equal((await waiting).status,409,'deadline must be checked after waiting for the row lock');
+    assert.equal((await call('attempt/navigate',{section:1},undefined,other)).status,200);assert.equal((await call('attempt/navigate',{section:0},undefined,other)).status,403,'expired sections cannot be revisited even without section locking');
+  } finally {server.closeAllConnections();await new Promise(r=>server.close(r));await closeTestPool();delete process.env.DATABASE_URL;await admin.query(`DROP SCHEMA "${schema}" CASCADE`);await admin.end();}
+});

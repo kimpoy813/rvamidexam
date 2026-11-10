@@ -2,7 +2,7 @@ import pg from 'pg';
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import { normalizeBlueprint, previewOriginalImport } from '../server/neon/blueprint.js';
-import { gradeOne } from '../server/lib/exam-engine.js';
+import { gradeOne, rng, hashString, shuffleWith } from '../server/lib/exam-engine.js';
 
 const scrypt = promisify(crypto.scrypt);
 let pool;
@@ -29,6 +29,13 @@ async function initialize() {
         CREATE TABLE IF NOT EXISTS simple_teacher_tokens (token_hash TEXT PRIMARY KEY, teacher_id TEXT NOT NULL REFERENCES simple_teachers(id) ON DELETE CASCADE, expires_at TIMESTAMPTZ NOT NULL);
         CREATE TABLE IF NOT EXISTS simple_exams (id TEXT PRIMARY KEY, teacher_id TEXT NOT NULL REFERENCES simple_teachers(id), title TEXT NOT NULL, code TEXT UNIQUE NOT NULL, duration INTEGER NOT NULL, questions JSONB NOT NULL, open BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
         CREATE TABLE IF NOT EXISTS simple_attempts (token_hash TEXT PRIMARY KEY, exam_id TEXT NOT NULL REFERENCES simple_exams(id), student_name TEXT NOT NULL, student_no TEXT NOT NULL, answers JSONB NOT NULL DEFAULT '{}'::jsonb, started_at TIMESTAMPTZ NOT NULL DEFAULT now(), deadline TIMESTAMPTZ NOT NULL, submitted_at TIMESTAMPTZ, score INTEGER, total INTEGER);
+        ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS lock_sections BOOLEAN NOT NULL DEFAULT false;
+        ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS shuffle_questions BOOLEAN NOT NULL DEFAULT false;
+        ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS shuffle_choices BOOLEAN NOT NULL DEFAULT false;
+        ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS order_seed INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS current_section INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS max_section INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS section_starts JSONB NOT NULL DEFAULT '{}'::jsonb;
         ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS pending DOUBLE PRECISION NOT NULL DEFAULT 0;
         ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS manual_scores JSONB NOT NULL DEFAULT '{}'::jsonb;
         CREATE INDEX IF NOT EXISTS simple_attempts_exam ON simple_attempts(exam_id);
@@ -78,11 +85,8 @@ function parseQuestions(input, sections) {
   if (sections !== undefined) {
     const normalized = normalizeBlueprint(sections);
     if (!normalized.length || normalized.some(s => !s.questions.length)) throw fail(400, 'Each part needs at least one question.');
-    const qs = normalized.flatMap((s, index) => s.questions.map(q => ({ ...q, id:id(), section:{ index, title:s.title, instructions:s.instructions, lock_after:false, minutes:s.minutes } })));
+    const qs = normalized.flatMap((s, index) => s.questions.map(q => ({ ...q, id:id(), section:{ index, title:s.title, instructions:s.instructions, lock_after:s.lock_after, minutes:s.minutes } })));
     if (qs.length > 100) throw fail(400, 'Provide at most 100 questions.');
-    // Section locking and per-section timing require the original navigation
-    // protocol; do not silently promise them in the serverless edition.
-    if (normalized.some(s => s.minutes > 0)) throw fail(400, 'Per-part timers are not supported; use the exam time limit.');
     return qs;
   }
   // Legacy MCQ payload and stored exams remain compatible.
@@ -96,14 +100,40 @@ function parseQuestions(input, sections) {
     return { id:id(), prompt, choices, answer:q.answer };
   });
 }
+function examOptions(body) {
+  const options={}; for(const key of ['lock_sections','shuffle_questions','shuffle_choices']) {
+    if (body[key] !== undefined && typeof body[key] !== 'boolean') throw fail(400, 'Invalid exam setting.');
+    options[key]=body[key] ?? false;
+  } return options;
+}
 async function tx(fn) {
   const c = await pool.connect();
   try { await c.query('BEGIN'); const value = await fn(c); await c.query('COMMIT'); return value; }
   catch (err) { try { await c.query('ROLLBACK'); } catch {} throw err; }
   finally { c.release(); }
 }
-const bankRevision = exam => hash(JSON.stringify({ title:exam.title, duration:exam.duration, questions:exam.questions }));
-const publicQuestions = qs => qs.map(q => ({ id:q.id, prompt:q.prompt, choices:q.choices, kind:q.kind || 'mcq', points:q.points ?? 1, section:q.section || null }));
+const bankRevision = exam => hash(JSON.stringify({ title:exam.title, duration:exam.duration, questions:exam.questions, lock_sections:exam.lock_sections, shuffle_questions:exam.shuffle_questions, shuffle_choices:exam.shuffle_choices }));
+const sectionOf = q => q.section?.index ?? 0;
+function sectionInfo(a, index) { return a.questions.find(q => sectionOf(q) === index)?.section || { index:0, title:'Part 1', instructions:'', minutes:0, lock_after:false }; }
+function sectionDeadline(a, index) {
+  const start = a.section_starts?.[String(index)], minutes = Number(sectionInfo(a,index).minutes || 0);
+  return start && minutes ? new Date(Number(start) + minutes * 60000).toISOString() : null;
+}
+function sectionExpired(a, index) { const deadline=sectionDeadline(a,index); return deadline && new Date(deadline).getTime() <= new Date(a.server_now).getTime(); }
+function controlled(a) { return a.lock_sections || a.questions.some(q => Number(q.section?.minutes || 0) > 0); }
+function publicQuestions(a) {
+  const groups = new Map();
+  for (const q of a.questions) { const i=sectionOf(q); if(!groups.has(i)) groups.set(i,[]); groups.get(i).push(q); }
+  return [...groups.entries()].sort((x,y)=>x[0]-y[0]).flatMap(([i,qs]) => {
+    const ordered=a.shuffle_questions ? shuffleWith(qs,rng((a.order_seed ^ hashString(`part:${i}`)) >>> 0)) : qs;
+    return ordered.map(q => {
+      let keys=q.choices.map((_,n)=>n);
+      if(a.shuffle_choices && q.shuffle !== false && (q.kind === 'mcq' || q.kind === 'multiselect' || !q.kind)) keys=shuffleWith(keys,rng((a.order_seed ^ hashString(q.id)) >>> 0));
+      return { id:q.id, prompt:q.prompt, choices:keys.map(n=>q.choices[n]), choiceKeys:keys, kind:q.kind || 'mcq', points:q.points ?? 1, section:q.section || null };
+    });
+  });
+}
+function attemptState(a) { return { title:a.title, deadline:a.deadline, submitted:!!a.submitted_at, answers:a.answers, questions:publicQuestions(a), score:a.submitted_at ? a.score : null, total:a.submitted_at ? a.total : null, pending:a.submitted_at ? a.pending : null, currentSection:a.current_section, maxSection:a.max_section, sectionDeadline:sectionDeadline(a,a.current_section), serverTime:a.server_now, controlled:controlled(a), lockSections:a.lock_sections }; }
 function mark(q, value, manual) {
   const points = q.points ?? 1;
   if (manual && typeof manual.points === 'number') return { points:manual.points, pending:false };
@@ -117,9 +147,10 @@ function calculate(qs, answers, manual = {}) {
 }
 async function lockAttempt(client, token) {
   if (!/^[\w-]{24,64}$/.test(token)) throw fail(404, 'Attempt not found.');
-  const r = await client.query('SELECT a.*, e.questions, e.title FROM simple_attempts a JOIN simple_exams e ON e.id = a.exam_id WHERE a.token_hash=$1 FOR UPDATE OF a', [hash(token)]);
+  const r = await client.query('SELECT a.*, e.questions, e.title, e.lock_sections, e.shuffle_questions, e.shuffle_choices, clock_timestamp() AS server_now FROM simple_attempts a JOIN simple_exams e ON e.id = a.exam_id WHERE a.token_hash=$1 FOR UPDATE OF a', [hash(token)]);
   if (!r.rows[0]) throw fail(404, 'Attempt not found.');
-  return r.rows[0];
+  const clock = await client.query('SELECT clock_timestamp() AS server_now');
+  return { ...r.rows[0], server_now:clock.rows[0].server_now };
 }
 async function finalize(client, a) {
   if (a.submitted_at) return a;
@@ -172,8 +203,8 @@ export default async function handler(req, res) {
     if (path === 'simple/exams' && method === 'POST') {
       const t = await teacher(req); const b = await bodyOf(req); const title = String(b.title || '').trim(); const duration = Number(b.duration);
       if (!title || title.length > 150 || !Number.isInteger(duration) || duration < 1 || duration > 600) throw fail(400, 'Provide a title and duration between 1 and 600 minutes.');
-      const qs = parseQuestions(b.questions, b.sections); let code; let exam;
-      for (let n = 0; n < 5; n++) { code = crypto.randomBytes(6).toString('hex').toUpperCase(); try { exam = await query('INSERT INTO simple_exams(id,teacher_id,title,code,duration,questions) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,title,code,duration,open', [id(),t.id,title,code,duration,JSON.stringify(qs)]); break; } catch(e) { if (e.code !== '23505') throw e; } }
+      const qs = parseQuestions(b.questions, b.sections); const options=examOptions(b); let code; let exam;
+      for (let n = 0; n < 5; n++) { code = crypto.randomBytes(6).toString('hex').toUpperCase(); try { exam = await query('INSERT INTO simple_exams(id,teacher_id,title,code,duration,questions,lock_sections,shuffle_questions,shuffle_choices) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,title,code,duration,open', [id(),t.id,title,code,duration,JSON.stringify(qs),options.lock_sections,options.shuffle_questions,options.shuffle_choices]); break; } catch(e) { if (e.code !== '23505') throw e; } }
       if (!exam) throw fail(503, 'Could not create an access code. Try again.');
       return send(res, 201, exam.rows[0]);
     }
@@ -181,7 +212,7 @@ export default async function handler(req, res) {
     if (bankMatch && (method === 'GET' || method === 'POST')) {
       const t = await teacher(req), examId = bankMatch[1];
       if (method === 'GET') {
-        const r = await query('SELECT id,title,duration,questions FROM simple_exams WHERE id=$1 AND teacher_id=$2', [examId,t.id]);
+        const r = await query('SELECT id,title,duration,questions,lock_sections,shuffle_questions,shuffle_choices FROM simple_exams WHERE id=$1 AND teacher_id=$2', [examId,t.id]);
         if (!r.rows[0]) throw fail(404, 'Exam not found.');
         const exam = r.rows[0];
         const count = await query('SELECT EXISTS(SELECT 1 FROM simple_attempts WHERE exam_id=$1) AS locked', [examId]);
@@ -189,14 +220,15 @@ export default async function handler(req, res) {
       }
       const b = await bodyOf(req), title = String(b.title || '').trim(), duration = Number(b.duration);
       if (!title || title.length > 150 || !Number.isInteger(duration) || duration < 1 || duration > 600 || !/^[a-f0-9]{64}$/.test(String(b.revision || ''))) throw fail(400, 'Provide a valid title, duration and bank revision.');
-      const questions = parseQuestions(b.questions, b.sections);
+      const questions = parseQuestions(b.questions, b.sections), options=examOptions(b);
       const exam = await tx(async c => {
-        const r = await c.query('SELECT id,title,duration,questions FROM simple_exams WHERE id=$1 AND teacher_id=$2 FOR UPDATE', [examId,t.id]);
+        const r = await c.query('SELECT id,title,duration,questions,lock_sections,shuffle_questions,shuffle_choices FROM simple_exams WHERE id=$1 AND teacher_id=$2 FOR UPDATE', [examId,t.id]);
         if (!r.rows[0]) throw fail(404, 'Exam not found.');
         if (bankRevision(r.rows[0]) !== b.revision) throw fail(409, 'This exam changed since it was loaded. Reload the saved bank before editing.');
+        if (['lock_sections','shuffle_questions','shuffle_choices'].some(key => b[key] === undefined && r.rows[0][key])) throw fail(409, 'Reload the question editor to preserve this exam’s settings.');
         const attempts = await c.query('SELECT 1 FROM simple_attempts WHERE exam_id=$1 LIMIT 1', [examId]);
         if (attempts.rowCount) throw fail(409, 'This exam already has student attempts. Its question bank cannot be changed; create a new exam instead.');
-        const updated = await c.query('UPDATE simple_exams SET title=$2,duration=$3,questions=$4 WHERE id=$1 RETURNING id,title,duration,questions', [examId,title,duration,JSON.stringify(questions)]);
+        const updated = await c.query('UPDATE simple_exams SET title=$2,duration=$3,questions=$4,lock_sections=$5,shuffle_questions=$6,shuffle_choices=$7 WHERE id=$1 RETURNING id,title,duration,questions,lock_sections,shuffle_questions,shuffle_choices', [examId,title,duration,JSON.stringify(questions),options.lock_sections,options.shuffle_questions,options.shuffle_choices]);
         return updated.rows[0];
       });
       return send(res,200,{...exam, revision:bankRevision(exam)});
@@ -254,30 +286,42 @@ export default async function handler(req, res) {
       await tx(async c => {
         const exam = await c.query('SELECT id,duration FROM simple_exams WHERE code=$1 AND open=true FOR UPDATE', [code]);
         if (!exam.rows[0]) throw fail(404, 'Exam not found or closed.');
-        await c.query("INSERT INTO simple_attempts(token_hash,exam_id,student_name,student_no,deadline) VALUES($1,$2,$3,$4,now()+($5 * interval '1 minute'))", [hash(token),exam.rows[0].id,name,no,exam.rows[0].duration]);
+        await c.query("INSERT INTO simple_attempts(token_hash,exam_id,student_name,student_no,started_at,deadline,order_seed,section_starts) VALUES($1,$2,$3,$4,clock_timestamp(),clock_timestamp()+($5 * interval '1 minute'),$6,jsonb_build_object('0',extract(epoch from clock_timestamp()) * 1000))", [hash(token),exam.rows[0].id,name,no,exam.rows[0].duration,crypto.randomInt(1,2**31)]);
       });
       return send(res,201,{ token });
     }
-    const attemptMatch = path.match(/^simple\/attempt(?:\/(answer|submit))?$/);
+    const attemptMatch = path.match(/^simple\/attempt(?:\/(answer|submit|navigate))?$/);
     if (attemptMatch) {
       const token = String(req.headers['x-exam-token'] || ''), action = attemptMatch[1];
       if ((!action && method !== 'GET') || (action && method !== 'POST')) throw fail(405,'Method not allowed.');
-      const b = action === 'answer' ? await bodyOf(req) : {};
+      const b = action === 'answer' || action === 'navigate' ? await bodyOf(req) : {};
       const data = await tx(async c => {
         let a = await lockAttempt(c, token);
-        if (!a.submitted_at && new Date(a.deadline).getTime() <= Date.now()) a = await finalize(c,a);
+        if (!a.submitted_at && new Date(a.deadline).getTime() <= new Date(a.server_now).getTime()) a = await finalize(c,a);
         if (action === 'answer') {
           if (a.submitted_at) return { answerClosed:true };
           const q = a.questions.find(q => q.id === b.questionId);
           if (!q) throw fail(400,'Invalid answer.');
+          const section=sectionOf(q);
+          if (controlled(a) && section !== a.current_section) throw fail(403,'Navigate to this part before answering.');
+          if (sectionExpired(a,section)) throw fail(409,'Time for this part has expired. Move to another part or submit.');
           const kind = q.kind || 'mcq', value = b.answer;
           const validChoice = n => Number.isInteger(n) && n >= 0 && n < q.choices.length;
           if ((kind === 'mcq' || kind === 'truefalse') && !validChoice(value)) throw fail(400,'Invalid answer.');
           if (kind === 'multiselect' && (!Array.isArray(value) || value.length > q.choices.length || value.some(n => !validChoice(n)) || new Set(value).size !== value.length)) throw fail(400,'Invalid answer.');
           if ((kind === 'short' || kind === 'essay') && (typeof value !== 'string' || value.length > 8000)) throw fail(400,'Invalid answer.');
           const r = await c.query('UPDATE simple_attempts SET answers=jsonb_set(answers, ARRAY[$2]::text[], $3::jsonb, true) WHERE token_hash=$1 RETURNING answers', [a.token_hash,q.id,JSON.stringify(value)]); a.answers = r.rows[0].answers;
+        } else if (action === 'navigate') {
+          if (a.submitted_at) return attemptState(a);
+          const target=b.section;
+          if (!Number.isInteger(target) || !a.questions.some(q=>sectionOf(q)===target)) throw fail(400,'Unknown part.');
+          if (a.lock_sections && target < a.max_section && sectionInfo(a,target).lock_after) throw fail(403,'That part is locked and cannot be revisited.');
+          if (sectionExpired(a,target) && target !== a.current_section) throw fail(403,'Time for that part has expired.');
+          const starts={...a.section_starts}; if (!starts[String(target)]) starts[String(target)] = new Date(a.server_now).getTime();
+          const r=await c.query('UPDATE simple_attempts SET current_section=$2,max_section=GREATEST(max_section,$2),section_starts=$3 WHERE token_hash=$1 RETURNING current_section,max_section,section_starts', [a.token_hash,target,JSON.stringify(starts)]);
+          a={...a,...r.rows[0]};
         } else if (action === 'submit') a = await finalize(c,a);
-        return { title:a.title, deadline:a.deadline, submitted:!!a.submitted_at, answers:a.answers, questions:publicQuestions(a.questions), score:a.submitted_at ? a.score : null, total:a.submitted_at ? a.total : null, pending:a.submitted_at ? a.pending : null };
+        return attemptState(a);
       });
       if (data.answerClosed) throw fail(409,'This attempt is already submitted.');
       return send(res,200,data);

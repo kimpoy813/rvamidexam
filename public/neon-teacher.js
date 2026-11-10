@@ -21,6 +21,8 @@ function part(initial = null) {
   const titleLabel = document.createElement('label'); titleLabel.textContent = 'Part title';
   const title = document.createElement('input'); title.className='part-title'; title.required=true; title.maxLength=200; title.value=initial?.title || `Part ${$('#editors').children.length+1}`; titleLabel.append(title); section.append(titleLabel);
   const instLabel = document.createElement('label'); instLabel.textContent='Part instructions'; const instructions=document.createElement('textarea'); instructions.className='part-instructions'; instructions.maxLength=10000; instructions.value=initial?.instructions || ''; instLabel.append(instructions); section.append(instLabel);
+  const timerLabel=document.createElement('label'); timerLabel.textContent='Part time limit in minutes (0 = no separate limit)'; const timer=document.createElement('input'); timer.type='number'; timer.className='part-minutes'; timer.min='0'; timer.max='600'; timer.step='1'; timer.required=true; timer.value=String(initial?.minutes ?? 0); timerLabel.append(timer); section.append(timerLabel);
+  const lockLabel=document.createElement('label'); const lock=document.createElement('input'); lock.type='checkbox'; lock.className='part-lock'; lock.checked=initial?.lock_after !== false; lockLabel.append(lock,document.createTextNode(' Lock this part after leaving it (when exam option is on)')); section.append(lockLabel);
   const questions = document.createElement('div'); questions.className='part-questions'; section.append(questions);
   const add = document.createElement('button'); add.type='button'; add.className='btn btn-ghost btn-sm'; add.textContent='+ Add question to part'; add.addEventListener('click',()=>{ editor(null,section); dirty(); }); section.append(add);
   const remove = document.createElement('button'); remove.type='button'; remove.className='btn btn-ghost btn-sm'; remove.textContent='Remove part'; remove.addEventListener('click',()=>{ if (!confirm('Remove this part and all its questions?')) return; section.remove(); renumber(); dirty(); }); section.append(remove);
@@ -36,6 +38,7 @@ function editor(initial = null, section = $('#editors .part-editor:last-child'))
   const kindLabel=document.createElement('label'); kindLabel.textContent='Question type'; const kind=document.createElement('select'); kind.className='kind';
   for (const [value,name] of [['mcq','Multiple choice'],['multiselect','Multiple answers'],['truefalse','True / False'],['short','Short answer'],['essay','Essay']]) { const opt=document.createElement('option'); opt.value=value; opt.textContent=name; kind.append(opt); } kind.value=initial?.kind || 'mcq'; kindLabel.append(kind); box.append(kindLabel);
   const points=field('Points','number','points'); points.min='0'; points.max='1000'; points.step='any'; points.required=true; points.value=String(initial?.points ?? 1);
+  const shuffleLabel=document.createElement('label'); const shuffle=document.createElement('input'); shuffle.type='checkbox'; shuffle.className='question-shuffle'; shuffle.checked=initial?.shuffle !== false; shuffleLabel.append(shuffle,document.createTextNode(' Allow choices to be shuffled')); box.append(shuffleLabel);
   const optionsHost=document.createElement('div'); optionsHost.className='options-host'; box.append(optionsHost);
   const keyLabel=document.createElement('label'); keyLabel.textContent='Correct choice (select multiple for multiple answers; leave blank for manual grading)'; const select=document.createElement('select'); select.className='answer'; keyLabel.append(select); box.append(keyLabel);
   const textLabel=document.createElement('label'); textLabel.textContent='Accepted answers (separate alternatives with |; leave blank for manual grading)'; const textKey=document.createElement('input'); textKey.className='text-key'; textKey.value=Array.isArray(initial?.answer) ? initial.answer.join(' | ') : typeof initial?.answer === 'string' ? initial.answer : ''; textLabel.append(textKey); box.append(textLabel);
@@ -55,23 +58,23 @@ function editor(initial = null, section = $('#editors .part-editor:last-child'))
   updateKind(); section.querySelector('.part-questions').append(box); renumber();
 }
 function readSections() {
-  return [...$('#editors').children].map(section => ({ title:section.querySelector('.part-title').value, instructions:section.querySelector('.part-instructions').value, lock_after:false, minutes:0,
+  return [...$('#editors').children].map(section => ({ title:section.querySelector('.part-title').value, instructions:section.querySelector('.part-instructions').value, lock_after:section.querySelector('.part-lock').checked, minutes:Number(section.querySelector('.part-minutes').value),
     questions:[...section.querySelector('.part-questions').children].map(box => {
       const kind=box.querySelector('.kind').value, choices=['mcq','multiselect','truefalse'].includes(kind) ? [...box.querySelectorAll('.option')].map(x=>x.value.trim()) : [];
       const select=box.querySelector('.answer'), chosen=[...select.selectedOptions].filter(o=>o.value!=='').map(o=>choices[Number(o.value)]);
       let answer=kind==='multiselect' ? (chosen.length ? chosen : null) : ['mcq','truefalse'].includes(kind) ? (chosen[0] ?? null) : kind==='short' ? (box.querySelector('.text-key').value.split('|').map(x=>x.trim()).filter(Boolean)) : null;
       if (kind==='short') answer=answer.length ? (answer.length===1 ? answer[0] : answer) : null;
-      return {kind,prompt:box.querySelector('.prompt').value,points:Number(box.querySelector('.points').value),choices,answer,shuffle:false};
+      return {kind,prompt:box.querySelector('.prompt').value,points:Number(box.querySelector('.points').value),choices,answer,shuffle:box.querySelector('.question-shuffle').checked};
     }) }));
 }
 function loadSections(sections) { $('#editors').replaceChildren(); for (const s of sections) { const node=part(s); for(const q of s.questions) editor(q,node); } }
 function groupedQuestions(qs) {
-  const sections=[]; for(const q of qs) { const index=q.section?.index ?? 0; if(!sections[index]) sections[index]={title:q.section?.title || 'Part 1',instructions:q.section?.instructions || '',questions:[]}; sections[index].questions.push(q); } return sections.filter(Boolean);
+  const sections=[]; for(const q of qs) { const index=q.section?.index ?? 0; if(!sections[index]) sections[index]={title:q.section?.title || 'Part 1',instructions:q.section?.instructions || '',minutes:q.section?.minutes ?? 0,lock_after:q.section?.lock_after ?? false,questions:[]}; sections[index].questions.push(q); } return sections.filter(Boolean);
 }
 function newDraft() {
   editExamId = ''; bankRevision = ''; bankLocked = false; draftDirty = false; editorGeneration++;
-  $('#examTitle').value = ''; $('#duration').value = 60; $('#editors').replaceChildren(); editor(null,part());
-  $('#bankMode').textContent = 'Creating a new exam. Parts use the overall exam timer; section locking is not yet supported.';
+  $('#examTitle').value = ''; $('#duration').value = 60; $('#lockSections').checked=false; $('#shuffleQuestions').checked=false; $('#shuffleChoices').checked=false; $('#editors').replaceChildren(); editor(null,part());
+  $('#bankMode').textContent = 'Creating a new exam. Configure parts and exam options below.';
   $('#draftStatus').textContent = 'New exam draft'; $('#saveBank').textContent = 'Create exam'; $('#saveBank').disabled = false;
 }
 async function loadBank() {
@@ -81,7 +84,7 @@ async function loadBank() {
   const data = await api(`exams/${encodeURIComponent(examId)}/bank`);
   if (generation !== editorGeneration || examId !== selected || !token) return;
   editExamId = examId; bankRevision = data.revision; bankLocked = data.locked; draftDirty = false;
-  $('#examTitle').value = data.title; $('#duration').value = data.duration; loadSections(groupedQuestions(data.questions));
+  $('#examTitle').value = data.title; $('#duration').value = data.duration; $('#lockSections').checked=data.lock_sections; $('#shuffleQuestions').checked=data.shuffle_questions; $('#shuffleChoices').checked=data.shuffle_choices; loadSections(groupedQuestions(data.questions));
   $('#bankMode').textContent = data.locked ? `Viewing ${data.title}. This exam has attempts and cannot be edited; create a new exam instead.` : `Editing ${data.title}. Saving replaces this exam's question bank.`;
   $('#draftStatus').textContent = data.locked ? 'Question bank locked' : 'Saved bank loaded';
   $('#saveBank').textContent = 'Save question bank'; $('#saveBank').disabled = data.locked;
@@ -191,7 +194,7 @@ $('#previewImport').addEventListener('click', async e => {
   try {
     const text = $('#importText').value; const data = await api('import-preview', { text });
     if (text !== $('#importText').value || !token) return;
-    const info = document.createElement('p'); info.textContent = `${data.sections.reduce((n,s)=>n+s.questions.length,0)} questions in ${data.sections.length} parts. ${data.warnings.join(' ')} Part-specific timers and section locking are not yet supported.`; preview.append(info);
+    const info = document.createElement('p'); info.textContent = `${data.sections.reduce((n,s)=>n+s.questions.length,0)} questions in ${data.sections.length} parts. ${data.warnings.join(' ')} Review part timers and locking before saving.`; preview.append(info);
     for(const section of data.sections) { const h=document.createElement('strong'); h.textContent=section.title; preview.append(h); const list=document.createElement('ol'); for(const q of section.questions) { const li=document.createElement('li'); li.textContent=`${q.prompt} (${q.kind}, ${q.points} points) — Correct: ${q.answer == null ? 'manual grading' : Array.isArray(q.answer) ? q.answer.join(', ') : q.answer}`; list.append(li); } preview.append(list); }
     const apply = document.createElement('button'); apply.type = 'button'; apply.className = 'btn btn-primary'; apply.textContent = 'Use these questions';
     apply.addEventListener('click', () => {
@@ -206,7 +209,7 @@ $('#previewImport').addEventListener('click', async e => {
 $('#create').addEventListener('submit', async e => {
   e.preventDefault(); if (bankLocked) return;
   const form = e.currentTarget, button = $('#saveBank');
-  const payload = { title:$('#examTitle').value, duration:Number($('#duration').value), sections:readSections() };
+  const payload = { title:$('#examTitle').value, duration:Number($('#duration').value), sections:readSections(), lock_sections:$('#lockSections').checked, shuffle_questions:$('#shuffleQuestions').checked, shuffle_choices:$('#shuffleChoices').checked };
   const editing = editExamId, currentToken = token;
   const controls = [...form.elements, $('#newExam'), $('#loadBank'), $('#previewImport'), $('#importFile')];
   controls.forEach(c => { c.disabled = true; });

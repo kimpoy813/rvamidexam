@@ -10,7 +10,7 @@
     <div class="rules"><h3 class="rules-title">Before you begin</h3><ul class="rules-list">
       <li><b>Your exam is timed.</b> The timer starts when you enter and continues if you refresh the page.</li>
       <li><b>Answers save automatically.</b> Wait for the saved message after choosing an answer.</li>
-      <li><b>You can go back.</b> Review and change answers before you submit.</li>
+      <li><b>Navigation rules vary.</b> Your teacher may lock parts or set separate part timers.</li>
       <li><b>Keep this tab.</b> You can resume after a refresh in the same tab, but not on another device.</li>
       <li><b>Your score appears on submission.</b> Written answers may require teacher grading.</li>
     </ul></div>
@@ -23,7 +23,7 @@
     <div class="entry-foot"><span class="tiny muted">Your responses are saved to your teacher's exam.</span></div></section>
 </div></main>
 <div id="exam" class="hidden">
-  <header class="appbar"><div class="appbar-in"><div class="brand"><div class="brand-mark">EX</div><div><span class="brand-text" id="title">Examination</span><span class="brand-sub">Examination in progress</span></div></div><div class="spacer"></div><div class="timer" id="timer" aria-live="off"></div><button class="btn btn-primary btn-sm" id="submitTop" type="button">Submit</button></div></header>
+  <header class="appbar"><div class="appbar-in"><div class="brand"><div class="brand-mark">EX</div><div><span class="brand-text" id="title">Examination</span><span class="brand-sub">Examination in progress</span></div></div><div class="spacer"></div><div><div class="timer" id="timer" aria-live="off"></div><div class="tiny muted" id="sectionTimer" aria-live="polite"></div></div><button class="btn btn-primary btn-sm" id="submitTop" type="button">Submit</button></div></header>
   <div class="exam-main"><aside class="rail"><div class="rail-card"><div class="rail-head"><div class="t">Your progress</div></div><div class="progress-ring"><div><div class="neon-progress" id="progress">0 / 0</div><div class="tiny muted">questions answered</div></div></div></div><div class="rail-card"><div class="rail-head"><div class="t">Question map</div></div><div class="palette" id="palette"></div><div class="legend"><span><i style="background:#ecfdf5;border-color:#a7f3d0"></i> Answered</span><span><i style="background:#fff"></i> Blank</span></div></div></aside>
   <main><section class="qcard"><div class="qcard-head"><span class="qchip" id="qChip">Question</span><span class="qpoints" id="qPoints">1 point</span></div><div class="qbody" id="questions"></div><div class="qfoot"><button class="btn btn-ghost" id="prev" type="button">← Previous</button><span class="tiny muted" id="position"></span><button class="btn btn-primary" id="next" type="button">Next →</button></div></section></main></div>
   <div class="dock"><div class="dock-in"><span class="save-state" id="save" role="status" aria-live="polite">Answers are saved automatically.</span><div class="spacer"></div><button class="btn btn-primary" id="submit" type="button">Submit examination</button></div></div>

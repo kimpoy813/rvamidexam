@@ -33,3 +33,7 @@
   .neon-form-grid { grid-template-columns:1fr; }
   .neon-alert { right:12px; bottom:12px; max-width:calc(100vw - 24px); }
 }
+
+.neon-settings { margin:16px 0; padding:14px; border:1px solid var(--line); border-radius:var(--radius); }
+.neon-settings label { display:block; margin:8px 0; font-size:13px; }
+.part-editor input[type=checkbox], .question-editor input[type=checkbox], .neon-settings input[type=checkbox] { width:auto; margin:0 6px 0 0; }

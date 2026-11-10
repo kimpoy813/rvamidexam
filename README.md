@@ -441,12 +441,13 @@ remain necessary to retain accounts and data.
 The Vercel deployment has a separate version of the app. It supports teacher
 self-registration, section titles and instructions, multiple-choice, multiple
 answer, true/false, short-answer and essay questions, autosaves, manual grading,
-and text/JSON/CSV question import. Scores with ungraded answers are provisional.
+text/JSON/CSV question import, optional section locking and timers, and
+deterministic per-student question and choice shuffling. Scores with ungraded
+answers are provisional.
 Existing multiple-choice exams and results use the same `simple_*` tables.
 
-This is **not full parity** with the original app: per-section timers, section
-locking, shuffling, live presence/proctoring, SQLite data migration and some
-other settings are not implemented. Each part must contain a question. The
+This is **not full parity** with the original app: live presence/proctoring,
+SQLite data migration and some other settings are not implemented. Each part must contain a question. The
 progress snapshot does not show whether students are online. Students cannot
 return on another device and cannot view a later grade after leaving the result
 page; the teacher retains the graded result.
@@ -455,7 +456,8 @@ page; the teacher retains the graded result.
    Set a **pooled** Neon connection string as the sensitive `DATABASE_URL`
    environment variable for the intended deployment environments. Never put
    it in source control. Back up the database before upgrading. The database role needs permission to
-   create tables and indexes and alter the `simple_attempts` table on upgrade.
+   create tables and indexes and alter the `simple_exams` and `simple_attempts`
+   tables on upgrade.
 2. Deploy this branch after review. Open `/teacher` to create a teacher
    account. Create an exam and share its code with students;
    students open `/`. Closing an exam prevents new joins but does not end
@@ -466,8 +468,13 @@ page; the teacher retains the graded result.
    concurrent edits rather than silently overwriting them.
 3. Answers save as students make selections or type. Students must keep the same tab
    to resume after a reload; this first version cannot resume on a different
-   browser or device. Expired attempts are scored on the next student request
-   or when the teacher opens results, rather than by a background timer.
+   browser or device. Each timed part starts when entered, continues while
+   away, and cannot be answered or revisited after its deadline. Part expiry
+   does not automatically advance or submit the exam; the student must move on
+   or submit. A part marked as lockable cannot be revisited after moving forward
+   if section locking is enabled. The overall deadline still applies. Expired
+   attempts are scored on the next student request or when the teacher opens
+   results, rather than by a background timer.
 4. Test with a small class before relying on it, monitor Neon/Vercel free-tier
    quotas, and make independent database backups. Free services have usage and
    availability limits. Registration is open; there is no email verification or
@@ -477,7 +484,7 @@ The PostgreSQL integration test is opt-in and requires a **disposable** test
 database with permission to create and drop schemas:
 
 ```sh
-TEST_DATABASE_URL='postgresql://...' node --test tests/simple-neon.test.js tests/simple-ui.test.js tests/simple-types.test.js tests/simple-types-ui.test.js tests/simple-migration.test.js
+TEST_DATABASE_URL='postgresql://...' node --test tests/simple-neon.test.js tests/simple-ui.test.js tests/simple-types.test.js tests/simple-types-ui.test.js tests/simple-migration.test.js tests/simple-navigation.test.js
 ```
 
 Do not run this test against a production database. Without `TEST_DATABASE_URL`
