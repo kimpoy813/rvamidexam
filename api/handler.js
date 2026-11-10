@@ -114,6 +114,9 @@ function parseQuestions(input, sections) {
   if (sections !== undefined) {
     const normalized = normalizeBlueprint(sections);
     if (!normalized.length || normalized.some(s => !s.questions.length)) throw fail(400, 'Each part needs at least one question.');
+    for(const [si,section] of normalized.entries()) for(const [qi,q] of section.questions.entries()) {
+      if(q.kind !== 'essay' && q.answer === null) throw fail(400, `Part ${si+1}, question ${qi+1} needs an answer key for automatic grading.`);
+    }
     const qs = normalized.flatMap((s, index) => s.questions.map(q => ({ ...q, id:id(), section:{ index, title:s.title, instructions:s.instructions, lock_after:s.lock_after, minutes:s.minutes } })));
     if (qs.length > 100) throw fail(400, 'Provide at most 100 questions.');
     return qs;
@@ -262,7 +265,7 @@ export default async function handler(req, res) {
         ? flat.map(q => ({prompt:q.prompt,choices:q.choices,answer:q.choices.findIndex(c => c === q.answer)})) : [];
       return send(res,200,{ ...preview, questions });
     }
-    if (path === 'simple/exams' && method === 'GET') { const t = await teacher(req); const r = await query('SELECT id,title,code,duration,open,created_at FROM simple_exams WHERE teacher_id=$1 ORDER BY created_at DESC', [t.id]); return send(res, 200, { exams: r.rows }); }
+    if (path === 'simple/exams' && method === 'GET') { const t = await teacher(req); const r = await query('SELECT id,title,code,duration,open,created_at,jsonb_array_length(questions) AS question_count FROM simple_exams WHERE teacher_id=$1 ORDER BY created_at DESC', [t.id]); return send(res, 200, { exams: r.rows }); }
     if (path === 'simple/exams' && method === 'POST') {
       const t = await teacher(req); const b = await bodyOf(req); const title = String(b.title || '').trim(); const duration = Number(b.duration);
       if (!title || title.length > 150 || !Number.isInteger(duration) || duration < 1 || duration > 600) throw fail(400, 'Provide a title and duration between 1 and 600 minutes.');
@@ -395,7 +398,7 @@ export default async function handler(req, res) {
         const expired = await c.query('SELECT * FROM simple_attempts WHERE exam_id=$1 AND submitted_at IS NULL AND deadline <= now() FOR UPDATE', [resultMatch[1]]);
         for (const row of expired.rows) await finalize(c, { ...row, questions:exam.rows[0].questions });
       });
-      const r = await query('SELECT token_hash AS attempt_id,student_name,student_no,student_class,student_section,started_at,submitted_at,score,total,pending,answers,manual_scores,integrity_events,integrity_cleared_count,integrity_total,integrity_cleared_total,completion_reason,teacher_actions FROM simple_attempts WHERE exam_id=$1 ORDER BY started_at DESC', [resultMatch[1]]);
+      const r = await query('SELECT token_hash AS attempt_id,student_name,student_no,student_class,student_section,started_at,deadline,submitted_at,score,total,pending,answers,manual_scores,integrity_events,integrity_cleared_count,integrity_total,integrity_cleared_total,completion_reason,teacher_actions FROM simple_attempts WHERE exam_id=$1 ORDER BY started_at DESC', [resultMatch[1]]);
       const submitted=r.rows.filter(row=>row.submitted_at && row.completion_reason !== 'invalidated');
       const analysis=exam.rows[0].questions.map((q,index)=>{
         let answered=0, correct=0, assessed=0, awaiting=0;
@@ -418,10 +421,14 @@ export default async function handler(req, res) {
     }
     if(path==='simple/result-lookup' && method==='POST') {
       await limit(req,'result-lookup',300); const b=await bodyOf(req);
-      const code=String(b.code||'').trim().toUpperCase(), number=String(b.number||'').trim(), key=String(b.resultKey||'').trim();
-      if(!code || code.length>30 || number.length<2 || number.length>40 || !/^[A-Za-z0-9_-]{22}$/.test(key)) throw fail(400,'Enter the exam code, student number and private result key.');
-      const r=await query(`SELECT e.title,a.score,a.total,a.pending FROM simple_attempts a JOIN simple_exams e ON e.id=a.exam_id
-        WHERE e.code=$1 AND lower(trim(a.student_no))=lower(trim($2)) AND a.result_key_hash=$3 AND e.results_released=true AND a.submitted_at IS NOT NULL AND a.completion_reason IS DISTINCT FROM 'invalidated'`,[code,number,hash(key)]);
+      const code=String(b.code||'').trim().toUpperCase(), number=String(b.number||'').trim();
+      if(!code || code.length>30 || number.length<2 || number.length>40) throw fail(400,'Enter the exam code and student ID.');
+      // The latest attempt takes precedence even if it is in progress or invalidated;
+      // never fall back to an older released score in that case.
+      const r=await query(`SELECT e.title,a.score,a.total,a.pending FROM simple_exams e
+        JOIN LATERAL (SELECT score,total,pending,submitted_at,completion_reason FROM simple_attempts
+          WHERE exam_id=e.id AND lower(trim(student_no))=lower(trim($2)) ORDER BY started_at DESC,token_hash DESC LIMIT 1) a ON true
+        WHERE e.code=$1 AND e.results_released=true AND a.submitted_at IS NOT NULL AND a.completion_reason IS DISTINCT FROM 'invalidated'`,[code,number]);
       if(!r.rows.length) throw fail(404,'No released result found. Check your details or ask your teacher.');
       return send(res,200,r.rows[0]);
     }

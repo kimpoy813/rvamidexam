@@ -454,13 +454,16 @@ distribution, item analysis, and CSV export. Statistics exclude provisional
 scores and use assessed, answered items for correctness rates. A
 heartbeat is not proof a student is attentive, and connectivity gaps are not
 proof of misconduct. Scores are hidden by default. Teachers can release or hide
-scores for an exam from Results. Once released, a student can check a submitted,
-non-invalidated attempt using the exam code, student number, and the private
-result key shown after submission. A released score with pending manual grading
-is labeled provisional. Hiding scores cannot undo a result already seen or saved.
-Students must save their private key; it is not recoverable without the original
-attempt session, so a teacher may need to share the score separately. Older
-attempts can obtain a key only if their original session token is still available.
+scores for an exam from Results. Once released, students can look up their latest
+attempt with the exam code and student ID. **Anyone who knows those two values can
+view a released score**; they do not prove identity. Scores remain hidden until
+a teacher releases them. The latest attempt must be submitted and not invalidated;
+a newer in-progress or invalidated attempt does not reveal an older score. A score
+with pending manual grading is labeled provisional. Hiding scores cannot undo a
+result already seen or saved. All newly saved non-essay questions require answer
+keys and are graded automatically; short-answer checking only matches the teacher's
+accepted answers. Answered essays require teacher grading, as do older unkeyed
+questions. Existing data and grades are not rewritten by this change.
 Students cannot resume on another
 device or after closing the original tab. An active duplicate join using the same
 exam and student number is rejected and logged; students must contact their
@@ -487,7 +490,7 @@ profiles, devices, offline failures, or modified clients can bypass them. The mo
    concurrent edits rather than silently overwriting them. The Exam setup tab
    supports regenerating an access code, duplicating exams (copies start closed), permanently deleting an
    exam, clearing attempts, and changing the teacher password. Clearing attempts
-   removes responses and result keys and hides released scores; back up/export
+   removes responses and hides released scores; back up/export
    first. Regenerating the code invalidates the old code for both exam entry and
    result lookup; share the new code. Password changes sign out other teacher sessions. The monitor can show
    all exams owned by that teacher.
@@ -547,7 +550,7 @@ results, and teacher actions exist in both, but important differences remain:
   provide that complete drawer or record all of those metadata fields.
 - Render can show an item-by-item review when results are released; Vercel's
   private result lookup currently shows a score only. Vercel intentionally keeps
-  scores hidden until the teacher releases them and requires a private key.
+  scores hidden until the teacher releases them and uses exam code and student ID for lookup (which does not authenticate the student).
 - Setup in Render has automatic save indicators and additional compatibility
   toggles. Vercel uses explicit saves, always permits refresh in the original tab,
   and does not claim to enforce fullscreen. The Vercel Exam Details and Integrity

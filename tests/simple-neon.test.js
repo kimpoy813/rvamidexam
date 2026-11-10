@@ -94,7 +94,7 @@ test('serverless exam workflow survives concurrent saves and isolates teachers',
     assert.ok(!JSON.stringify(progress.data).includes('answers'));
     await admin.query(`UPDATE "${schema}".simple_attempts SET last_seen_at=now()-interval '36 seconds' WHERE token_hash=$1`,[crypto.createHash('sha256').update(joined[0].data.token).digest('hex')]);
     const stale=await call(`exams/${exam.id}/progress`,undefined,teacher); assert.equal(stale.data.attempts.find(x=>x.student_no==='N-0').recently_seen,false);
-    const lookup={code:exam.code,number:'N-0',resultKey:joined[0].data.resultKey};
+    const lookup={code:exam.code,number:'N-0'};
     assert.equal((await call('result-lookup',lookup)).status,404);
     const submitted = await Promise.all(joined.map(x=>call('attempt/submit',{},undefined,x.data.token)));
     assert.ok(submitted.every(x=>x.status===200 && !('score' in x.data) && !('total' in x.data)),JSON.stringify(submitted.find(x=>x.status!==200)));
@@ -105,7 +105,7 @@ test('serverless exam workflow survives concurrent saves and isolates teachers',
     assert.equal((await call(`exams/${exam.id}/release-results`,{released:true},other)).status,404);
     assert.equal((await call(`exams/${exam.id}/release-results`,{released:true},teacher)).status,200);
     const released=await call('result-lookup',lookup); assert.equal(released.status,200); assert.equal(released.data.score,2); assert.equal(released.data.total,2); assert.ok(!('answers' in released.data));
-    assert.equal((await call('result-lookup',{...lookup,number:'N-1'})).status,404); assert.equal((await call('result-lookup',{...lookup,resultKey:joined[1].data.resultKey})).status,404);
+    assert.equal((await call('result-lookup',{...lookup,number:'N-1'})).status,200);assert.equal((await call('result-lookup',{...lookup,number:'missing'})).status,404);assert.equal((await call('result-lookup',{...lookup,code:'WRONG'})).status,404);assert.equal((await call('result-lookup',{code:exam.code.toLowerCase(),number:' n-0 '})).status,200);
     assert.equal((await call(`exams/${exam.id}/release-results`,{released:false},teacher)).status,200);assert.equal((await call('result-lookup',lookup)).status,404);
     const results = await call(`exams/${exam.id}/results`,undefined,teacher);
     assert.equal(results.status,200,JSON.stringify(results.data)); assert.equal(results.data.results.length,50); assert.equal(results.data.results[0].student_class,'Grade 10'); assert.equal(results.data.results[0].student_section,'A'); assert.ok(results.data.results.every(x=>x.score===2)); const flagged=results.data.results.find(x=>x.student_no==='N-0'); assert.deepEqual(flagged.integrity_events.map(e=>e.type),['duplicate_join','paste','tab_hidden']);
