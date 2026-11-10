@@ -312,3 +312,7 @@
   .dock-in { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
   .qfoot { padding: 14px; }
 }
+
+.score-lookup { border-top: 1px solid var(--line); }
+.score-lookup summary { cursor: pointer; font-weight: 650; color: var(--brand-dark); }
+.score-lookup summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }

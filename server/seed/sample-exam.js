@@ -6,7 +6,7 @@
  * upload JSON/CSV) — the sample never overwrites a bank you have already saved.
  */
 export const SAMPLE_EXAM = {
-  title: 'Midterm Examination (SAMPLE)',
+  title: 'Final Examination',
   sections: [
     {
       title: 'Part I. Multiple Choice',

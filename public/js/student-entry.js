@@ -126,4 +126,25 @@ $('#joinForm').addEventListener('submit', async (e) => {
   }
 });
 
+let lookupGeneration = 0;
+if (location.hash === '#scoreLookupPanel') $('#scoreLookupPanel').open = true;
+const lookupForm = $('#scoreLookup');
+const lookupResult = $('#lookupResult');
+lookupForm.addEventListener('input', () => { lookupGeneration++; lookupResult.textContent = ''; });
+lookupForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const generation = ++lookupGeneration;
+  const button = lookupForm.querySelector('button');
+  button.disabled = true;
+  lookupResult.textContent = 'Checking…';
+  try {
+    const result = await api('/api/public/result-lookup', { method:'POST', body: {
+      code: $('#lookupCode').value, number: $('#lookupNumber').value
+    }});
+    if (generation === lookupGeneration) lookupResult.textContent = `${result.title}: ${result.score} / ${result.max}${result.pending ? ` (${result.pending} points awaiting grading; score is provisional)` : ''}`;
+  } catch (err) {
+    if (generation === lookupGeneration) lookupResult.textContent = err.message;
+  } finally { button.disabled = false; }
+});
+
 loadInfo();

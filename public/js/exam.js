@@ -506,7 +506,7 @@ async function renderResult() {
               ${data.violations ? `<span class="pill pill-info"><span class="pill-dot"></span>${data.violations} integrity flag(s)</span>` : ''}
             </div>` : `
             <p class="small muted" style="margin-top:16px">
-              Your teacher will release the scores. ${s.manual ? 'Some items are still being graded.' : ''}
+              ${data.status === 'invalidated' ? 'This attempt is not eligible for a score.' : `Your teacher will release the scores. ${s.manual ? 'Some items are still being graded.' : ''}`}
             </p>`}
         </div>
       </div>
@@ -533,7 +533,7 @@ async function renderResult() {
         </div>` : ''}
 
       <p class="center muted small" style="margin-top:28px">
-        You may close this window. Your responses are stored on the server.
+        You may close this window. Your responses are stored on the server. <a href="/#scoreLookupPanel">Check a released score</a> with your exam code and student ID.
       </p>
     </div>`;
 

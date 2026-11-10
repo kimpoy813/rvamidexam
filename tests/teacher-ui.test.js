@@ -257,7 +257,7 @@ test('the exam setup tab loads the current settings and question bank', async ()
     .dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
   await settle(900);
 
-  assert.equal($(win, '#sTitle').value, 'Midterm Examination (SAMPLE)');
+  assert.equal($(win, '#sTitle').value, 'Final Examination');
   assert.equal($(win, '#sDuration').value, '60', 'the one-hour limit should be configured');
   assert.equal($(win, '#sShuffleQ').checked, true, 'question shuffling should be on');
   assert.equal($(win, '#sFs').checked, false, 'full screen should not be required by default');
