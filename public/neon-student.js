@@ -2,8 +2,8 @@ const $ = s => document.querySelector(s);
 let token = sessionStorage.getItem('simple_exam_token') || '';
 let queue = Promise.resolve(), clock, paper = null, current = 0, submitting = false, moving = false, pending = 0, serverOffset = 0, confirmed = {};
 const scheduled = new Map(), failed = new Map(), versions = new Map();
-async function api(path, body) {
-  const res = await fetch('/api/simple/' + path, { method:body === undefined ? 'GET' : 'POST', headers:{ ...(body === undefined ? {} : { 'Content-Type':'application/json' }), ...(token ? { 'X-Exam-Token':token } : {}) }, body:body === undefined ? undefined : JSON.stringify(body) });
+async function api(path, body, keepalive=false) {
+  const res = await fetch('/api/simple/' + path, { method:body === undefined ? 'GET' : 'POST', keepalive, headers:{ ...(body === undefined ? {} : { 'Content-Type':'application/json' }), ...(token ? { 'X-Exam-Token':token } : {}) }, body:body === undefined ? undefined : JSON.stringify(body) });
   let data; try { data=await res.json(); } catch { throw new Error('Could not reach the exam server.'); }
   if (!res.ok) throw Object.assign(new Error(data.error || 'Request failed.'), {status:res.status}); return data;
 }
@@ -35,9 +35,28 @@ function record(q, value, debounce=false) {
 // Browser events are best-effort signals, not proof of cheating. They do not
 // detect another browser profile or physical device with different credentials.
 let monitoring=false, tabChannel=null, tabPing=null, heartbeatTimer=null, lastSecondTab=0, heartbeatInFlight=false;
+const integrityStorageKey='simple_integrity_pending';
+let integrityEvents=[], integrityInFlight=false, integrityTimer=null, integrityError=false;
+try {const saved=JSON.parse(sessionStorage.getItem(integrityStorageKey)||'null');if(saved?.token===token && Array.isArray(saved.events)) integrityEvents=saved.events.filter(e=>e && /^[A-Za-z0-9_-]{22}$/.test(e.eventId) && ['copy','cut','paste','second_tab','tab_hidden'].includes(e.type));} catch { /* Keep the exam usable if storage is unavailable. */ }
+function saveIntegrityQueue(){try{if(integrityEvents.length)sessionStorage.setItem(integrityStorageKey,JSON.stringify({token,events:integrityEvents}));else sessionStorage.removeItem(integrityStorageKey);}catch{error('Integrity events cannot be saved in this browser. Keep this tab open and notify your teacher.');}}
+function integrityStatus(){const text=integrityEvents.length ? `${integrityEvents.length} integrity event(s) waiting to sync.${integrityError?' Check your connection and keep this tab open.':''}` : '';$('#integritySync').textContent=text;$('#integritySyncCard').classList.toggle('hidden',!text);$('#resultIntegritySync').textContent=text;}
 function flag(type) {
-  api('attempt/integrity',{type}).then(state=>{if(state.submitted && monitoring && !submitting) load().catch(err=>error(err.message));}).catch(()=>error('An integrity event could not be recorded. Check your connection and notify your teacher.'));
+  const bytes=new Uint8Array(16);window.crypto.getRandomValues(bytes);const eventId=window.btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');
+  integrityEvents.push({type,eventId});saveIntegrityQueue();integrityStatus();flushIntegrity();
 }
+async function flushIntegrity(){
+  if(integrityInFlight || !token || !integrityEvents.length)return;
+  integrityInFlight=true;const attemptToken=token;
+  try {
+    while(integrityEvents.length && token===attemptToken){
+      const current=integrityEvents[0],state=await api('attempt/integrity',current,true);
+      if(token!==attemptToken)break;integrityEvents.shift();integrityError=false;saveIntegrityQueue();integrityStatus();
+      if(state.submitted && monitoring && !submitting) await load();
+    }
+  }catch {integrityError=true;integrityStatus();}
+  finally {integrityInFlight=false;if(integrityEvents.length && token===attemptToken){if(!integrityTimer)integrityTimer=setTimeout(()=>{integrityTimer=null;flushIntegrity();},10000);}else if(integrityTimer){clearTimeout(integrityTimer);integrityTimer=null;}}
+}
+window.addEventListener('online',()=>{if(integrityTimer){clearTimeout(integrityTimer);integrityTimer=null;}flushIntegrity();});
 for (const type of ['copy','cut','paste']) document.addEventListener(type,e=>{
   if(!monitoring) return;
   e.preventDefault(); flag(type); error(`${type[0].toUpperCase()+type.slice(1)} is not allowed during the exam.`);
@@ -48,7 +67,7 @@ function showIntegrityWarning(text) {
 }
 $('#integrityContinue').addEventListener('click',()=>{ $('#integrityVeil').classList.add('hidden'); $('#exam').inert=false; });
 document.addEventListener('visibilitychange',()=>{
-  if(monitoring && document.hidden) { flag('tab_hidden'); showIntegrityWarning('Leaving the exam tab is recorded and reported to your teacher. Return to the exam to continue.'); }
+  if(monitoring && document.hidden) { flag('tab_hidden'); showIntegrityWarning('Leaving the exam tab triggers an integrity event. Keep this tab open so it can sync to your teacher.'); }
 });
 async function heartbeat() {
   if(!monitoring || heartbeatInFlight) return;
@@ -75,7 +94,7 @@ async function ensureResultKey() {
 }
 function showResult(a) {
   const unsaved=scheduled.size || pending || failed.size;
-  stopMonitoring(); $('#integrityVeil').classList.add('hidden'); $('#exam').inert=false; clearInterval(clock); for (const item of scheduled.values()) clearTimeout(item.timer); scheduled.clear();
+  stopMonitoring(); integrityStatus(); flushIntegrity(); $('#integrityVeil').classList.add('hidden'); $('#exam').inert=false; clearInterval(clock); for (const item of scheduled.values()) clearTimeout(item.timer); scheduled.clear();
   $('#exam').classList.add('hidden'); $('#join').classList.add('hidden'); $('#result').classList.remove('hidden');
   $('#resultKeyDisplay').textContent=sessionStorage.getItem('simple_result_key') || 'Unavailable — use the button below to retry.';
   $('#score').textContent=`${a.completionReason==='invalidated' ? 'Your teacher invalidated this attempt. ' : a.completionReason==='integrity_limit' ? 'Your attempt was submitted after reaching the integrity-event limit. ' : ''}Your teacher will release the results.${unsaved ? ' Some changes may not have been saved before submission.' : ''}`;
@@ -140,7 +159,7 @@ async function go(index) {
     const wanted=paper.questions[index].id; applyState(a); current=paper.questions.findIndex(q=>q.id===wanted); if(current<0) current=0; moving=false; paint(); tick();
   } catch(e){ error(e.message); moving=false; paint(); }
 }
-async function load(){const a=await api('attempt'); try {await ensureResultKey();} catch { error('Could not create your private result key. You can retry after submitting.'); } if(a.submitted) showResult(a); else render(a);}
+async function load(){flushIntegrity();const a=await api('attempt'); try {await ensureResultKey();} catch { error('Could not create your private result key. You can retry after submitting.'); } if(a.submitted) showResult(a); else render(a);}
 async function finish(expired=false) {
   const buttons=[$('#submit'),$('#submitTop')]; if(submitting || moving) return;
   if(!expired && !confirm('Submit your exam? You cannot change answers afterward.')) return;
@@ -167,11 +186,11 @@ $('#copyResultKey').addEventListener('click',async e=>{
   catch(err){error(err.message || 'Could not retrieve the result key. Try again.');}finally{button.disabled=false;}
 });
 $('#checkReopen').addEventListener('click',async e=>{const button=e.currentTarget;button.disabled=true;try {await queue;const a=await api('attempt');if(a.submitted) error('The attempt is still submitted. Ask your teacher if you need it reopened.');else {$('#message').classList.add('hidden');render(a);}} catch(err){error(err.message);} finally{button.disabled=false;}});
-$('#newAttempt').addEventListener('click',()=>{ if(!confirm('Have you saved your private result key? Leaving also prevents checking whether this attempt was reopened in this tab.')) return;sessionStorage.removeItem('simple_exam_token');sessionStorage.removeItem('simple_result_key');token='';window.location.reload(); });
+$('#newAttempt').addEventListener('click',()=>{ if(!confirm('Have you saved your private result key? Leaving also prevents checking whether this attempt was reopened in this tab.')) return;if(integrityEvents.length && !confirm('Some integrity events are still waiting to sync. Leaving now may lose them. Leave anyway?'))return;integrityEvents=[];saveIntegrityQueue();sessionStorage.removeItem('simple_exam_token');sessionStorage.removeItem('simple_result_key');token='';window.location.reload(); });
 $('#prev').addEventListener('click',()=>go(current-1));
 $('#next').addEventListener('click',()=>go(current+1));
 $('#submit').addEventListener('click',()=>finish()); $('#submitTop').addEventListener('click',()=>finish());
 $('#agreeRules').addEventListener('change',()=>{$('#startExam').disabled=!$('#agreeRules').checked;});
 $('#joinForm').addEventListener('submit',async e=>{e.preventDefault();if(!$('#agreeRules').checked)return error('Please read and agree to the examination rules.');const b=$('#startExam');b.disabled=true;$('#message').classList.add('hidden');try {const r=await api('join',{code:$('#code').value,name:$('#name').value,number:$('#number').value,studentClass:$('#studentClass').value,studentSection:$('#studentSection').value});token=r.token;sessionStorage.setItem('simple_exam_token',token);sessionStorage.setItem('simple_result_key',r.resultKey);await load();} catch(e){error(e.message);} finally {b.disabled=!$('#agreeRules').checked;}});
-window.addEventListener('beforeunload', e => { if (scheduled.size || pending || failed.size) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', e => { if (scheduled.size || pending || failed.size || integrityEvents.length) { e.preventDefault(); e.returnValue = ''; } });
 if(token) load().catch(e=>error(e.message));

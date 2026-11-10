@@ -55,6 +55,17 @@ test('serverless exam workflow survives concurrent saves and isolates teachers',
     assert.equal(raceJoin.status,201); assert.ok([200,409].includes(raceEdit.status));
     const raceAttempt = await call('attempt',undefined,undefined,raceJoin.data.token);
     assert.equal(raceAttempt.data.questions[0].prompt,raceEdit.status===200 ? 'Updated' : 'Original');
+    const raceToken=raceJoin.data.token, eventId=crypto.randomBytes(16).toString('base64url');
+    const retries=await Promise.all(Array.from({length:8},()=>call('attempt/integrity',{type:'paste',eventId},undefined,raceToken)));
+    assert.equal(retries.filter(x=>x.data.recorded).length,1);
+    let raceProgress=(await call(`exams/${racedExam.id}/progress`,undefined,teacher)).data.attempts[0];assert.equal(raceProgress.integrity_count,1);
+    assert.equal((await call(`exams/${racedExam.id}/action`,{attemptId:raceProgress.attempt_id,action:'dismiss_flag'},teacher)).status,200);
+    assert.equal((await call('attempt/integrity',{type:'paste',eventId},undefined,raceToken)).data.recorded,false);
+    for(let i=0;i<505;i++) assert.equal((await call('attempt/integrity',{type:'copy',eventId:crypto.randomBytes(16).toString('base64url')},undefined,raceToken)).status,200);
+    raceProgress=(await call(`exams/${racedExam.id}/progress`,undefined,teacher)).data.attempts[0];assert.equal(raceProgress.integrity_count,505);assert.equal(raceProgress.integrity_events.length,500);
+    await call('attempt/submit',{},undefined,raceToken);
+    const lateId=crypto.randomBytes(16).toString('base64url');assert.equal((await call('attempt/integrity',{type:'cut',eventId:lateId},undefined,raceToken)).data.recorded,true);assert.equal((await call('attempt/integrity',{type:'cut',eventId:lateId},undefined,raceToken)).data.recorded,false);
+    const raceResults=(await call(`exams/${racedExam.id}/results`,undefined,teacher)).data.results[0];assert.equal(raceResults.integrity_total,507);assert.equal(raceResults.integrity_cleared_total,1);assert.equal(raceResults.integrity_events.length,500);
     assert.equal((await call('join',{code:exam.code,name:'Invalid Student',number:'BAD',studentClass:'  '})).status,400);
     assert.equal((await call('join',{code:exam.code,name:'Invalid Student',number:'BAD',studentSection:''})).status,400);
     const joined = await Promise.all(Array.from({length:50},(_,i)=>call('join',{ code:exam.code,name:`Student ${i}`,number:`N-${i}` })));
