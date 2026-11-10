@@ -5,6 +5,7 @@
  * half-written paper. Existing SQLite and simple_* data are not modified.
  */
 import crypto from 'node:crypto';
+import { normalizeBlueprint } from './blueprint.js';
 
 const uid = prefix => prefix + crypto.randomBytes(16).toString('hex');
 const digest = token => crypto.createHash('sha256').update(token).digest('hex');
@@ -40,27 +41,6 @@ async function owned(client, teacherId, examId, lock = false) {
   return rows[0];
 }
 
-function normalize(sections) {
-  if (!Array.isArray(sections) || sections.length > 100) throw error(400, 'Invalid sections.');
-  let total = 0;
-  return sections.map((s, si) => {
-    if (!s || typeof s !== 'object' || !Array.isArray(s.questions)) throw error(400, 'Invalid section.');
-    const title = String(s.title || `Part ${si + 1}`).trim();
-    const instructions = String(s.instructions || '').trim();
-    const minutes = Number(s.minutes ?? 0);
-    if (!title || title.length > 200 || instructions.length > 10000 || !Number.isInteger(minutes) || minutes < 0 || minutes > 600) throw error(400, 'Invalid section details.');
-    return { title, instructions, minutes, lock_after: s.lock_after !== false,
-      questions: s.questions.map(q => {
-        total++;
-        if (!q || typeof q !== 'object') throw error(400, 'Invalid question.');
-        const kind = q.kind || 'mcq', prompt = String(q.prompt || '').trim(), points = Number(q.points ?? 1);
-        const choices = q.choices ?? [], answer = q.answer ?? null;
-        if (!['mcq', 'multiselect', 'truefalse', 'short', 'essay'].includes(kind) || !prompt || prompt.length > 10000 || !Number.isFinite(points) || points < 0 || points > 1000 || !Array.isArray(choices) || choices.length > 20 || choices.some(c => typeof c !== 'string' || c.length > 2000) || !(answer === null || typeof answer === 'string' || (Array.isArray(answer) && answer.length <= 20 && answer.every(a => typeof a === 'string'))) || JSON.stringify(answer).length > 20000) throw error(400, 'Invalid question details.');
-        return { kind, prompt, points, choices, answer, shuffle: q.shuffle !== false, tags: String(q.tags || '').slice(0, 2000) };
-      }) };
-  }).map(s => { if (total > 1000) throw error(400, 'Too many questions.'); return s; });
-}
-
 /** Owner-scoped read; no caller can use an exam id to read another bank. */
 export async function getOwnedBlueprint(pool, teacherId, examId) {
   return transaction(pool, async client => {
@@ -71,7 +51,7 @@ export async function getOwnedBlueprint(pool, teacherId, examId) {
 
 /** Replace all sections atomically. Existing sessions keep their snapshots. */
 export async function replaceOwnedBlueprint(pool, teacherId, examId, sections) {
-  const parsed = normalize(sections);
+  const parsed = normalizeBlueprint(sections);
   return transaction(pool, async client => {
     await owned(client, teacherId, examId, true);
     await client.query('DELETE FROM sections WHERE exam_id=$1', [examId]);

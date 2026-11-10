@@ -10,9 +10,9 @@
     <div class="rules"><h3 class="rules-title">Before you begin</h3><ul class="rules-list">
       <li><b>Your exam is timed.</b> The timer starts when you enter and continues if you refresh the page.</li>
       <li><b>Answers save automatically.</b> Wait for the saved message after choosing an answer.</li>
-      <li><b>You can go back.</b> Review and change answers before you submit.</li>
+      <li><b>Navigation rules vary.</b> Your teacher may lock parts or set separate part timers.</li>
       <li><b>Keep this tab.</b> You can resume after a refresh in the same tab, but not on another device.</li>
-      <li><b>Your score appears on submission.</b> Your teacher can review your responses.</li>
+      <li><b>Your score appears on submission.</b> Written answers may require teacher grading.</li>
     </ul></div>
   </section>
   <section class="card entry-panel"><div class="card-pad"><div class="panel-kicker"><span class="panel-kicker-dot"></span> Student check-in</div><h2>Ready to begin?</h2><p class="muted small" style="margin-top:5px">Enter your details below. Your teacher will provide the access code.</p>
@@ -23,9 +23,9 @@
     <div class="entry-foot"><span class="tiny muted">Your responses are saved to your teacher's exam.</span></div></section>
 </div></main>
 <div id="exam" class="hidden">
-  <header class="appbar"><div class="appbar-in"><div class="brand"><div class="brand-mark">EX</div><div><span class="brand-text" id="title">Examination</span><span class="brand-sub">Examination in progress</span></div></div><div class="spacer"></div><div class="timer" id="timer" aria-live="off"></div><button class="btn btn-primary btn-sm" id="submitTop" type="button">Submit</button></div></header>
+  <header class="appbar"><div class="appbar-in"><div class="brand"><div class="brand-mark">EX</div><div><span class="brand-text" id="title">Examination</span><span class="brand-sub">Examination in progress</span></div></div><div class="spacer"></div><div><div class="timer" id="timer" aria-live="off"></div><div class="tiny muted" id="sectionTimer" aria-live="polite"></div></div><button class="btn btn-primary btn-sm" id="submitTop" type="button">Submit</button></div></header>
   <div class="exam-main"><aside class="rail"><div class="rail-card"><div class="rail-head"><div class="t">Your progress</div></div><div class="progress-ring"><div><div class="neon-progress" id="progress">0 / 0</div><div class="tiny muted">questions answered</div></div></div></div><div class="rail-card"><div class="rail-head"><div class="t">Question map</div></div><div class="palette" id="palette"></div><div class="legend"><span><i style="background:#ecfdf5;border-color:#a7f3d0"></i> Answered</span><span><i style="background:#fff"></i> Blank</span></div></div></aside>
-  <main><section class="qcard"><div class="qcard-head"><span class="qchip" id="qChip">Question</span><span class="qpoints">1 point</span></div><div class="qbody" id="questions"></div><div class="qfoot"><button class="btn btn-ghost" id="prev" type="button">← Previous</button><span class="tiny muted" id="position"></span><button class="btn btn-primary" id="next" type="button">Next →</button></div></section></main></div>
+  <main><section class="qcard"><div class="qcard-head"><span class="qchip" id="qChip">Question</span><span class="qpoints" id="qPoints">1 point</span></div><div class="qbody" id="questions"></div><div class="qfoot"><button class="btn btn-ghost" id="prev" type="button">← Previous</button><span class="tiny muted" id="position"></span><button class="btn btn-primary" id="next" type="button">Next →</button></div></section></main></div>
   <div class="dock"><div class="dock-in"><span class="save-state" id="save" role="status" aria-live="polite">Answers are saved automatically.</span><div class="spacer"></div><button class="btn btn-primary" id="submit" type="button">Submit examination</button></div></div>
 </div>
 <main class="shell shell-narrow hidden" id="result"><section class="card result-hero"><div class="brand-mark neon-result-mark">✓</div><h1>Exam submitted</h1><p id="score" style="margin-top:12px"></p><p class="muted" style="margin-top:8px">You can close this page.</p></section></main>

@@ -5,7 +5,7 @@
 .neon-panel-body { padding:18px; }
 .neon-form-grid { display:grid; grid-template-columns:2fr 1fr; gap:14px; }
 .neon-form-grid .field + .field { margin-top:0; }
-.question-editor { margin:14px 0; padding:18px; border:1px solid var(--line); background:var(--surface-2); border-radius:var(--radius); }
+.part-editor, .question-editor { margin:14px 0; padding:18px; border:1px solid var(--line); background:var(--surface-2); border-radius:var(--radius); }
 .question-editor h3 { font-size:14px; }
 .question-editor > label { display:block; font-size:12.5px; font-weight:650; margin-top:12px; }
 .question-editor input, .question-editor select { margin-top:5px; }
@@ -33,3 +33,7 @@
   .neon-form-grid { grid-template-columns:1fr; }
   .neon-alert { right:12px; bottom:12px; max-width:calc(100vw - 24px); }
 }
+
+.neon-settings { margin:16px 0; padding:14px; border:1px solid var(--line); border-radius:var(--radius); }
+.neon-settings label { display:block; margin:8px 0; font-size:13px; }
+.part-editor input[type=checkbox], .question-editor input[type=checkbox], .neon-settings input[type=checkbox] { width:auto; margin:0 6px 0 0; }

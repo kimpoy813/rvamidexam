@@ -13,10 +13,10 @@ test('simplified teacher and student interfaces complete an exam', { skip: !url,
   const conn = new URL(url); conn.searchParams.set('options', `-csearch_path=${name}`); process.env.DATABASE_URL = conn.toString();
   const { default:handler, closeTestPool } = await import('../api/handler.js');
   const server = http.createServer(handler); server.listen(0,'127.0.0.1'); await once(server,'listening'); const base = `http://127.0.0.1:${server.address().port}`;
-  const original = Object.fromEntries(['document','sessionStorage','fetch','confirm'].map(k => [k,globalThis[k]])); const nativeFetch = globalThis.fetch;
+  const original = Object.fromEntries(['document','sessionStorage','fetch','confirm','window'].map(k => [k,globalThis[k]])); const nativeFetch = globalThis.fetch;
   let teacherDom, studentDom;
   const wait = async fn => { for (let i=0;i<60;i++) { if (fn()) return; await new Promise(r=>setTimeout(r,50)); } throw new Error('UI did not reach expected state'); };
-  function use(dom) { globalThis.document = dom.window.document; globalThis.sessionStorage = dom.window.sessionStorage; globalThis.fetch = (url,opts) => nativeFetch(String(url).startsWith('/') ? base+url : url,opts); globalThis.confirm = () => true; }
+  function use(dom) { globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.sessionStorage = dom.window.sessionStorage; globalThis.fetch = (url,opts) => nativeFetch(String(url).startsWith('/') ? base+url : url,opts); globalThis.confirm = () => true; }
   try {
     teacherDom = new JSDOM(fs.readFileSync(new URL('../public/neon-teacher.html', import.meta.url),'utf8'), { url:base+'/teacher' }); use(teacherDom);
     await import('../public/neon-teacher.js?simple-ui-test'); const t = teacherDom.window.document; const fill = (node,val) => { node.value=val; };
@@ -25,7 +25,10 @@ test('simplified teacher and student interfaces complete an exam', { skip: !url,
     await wait(()=>!t.querySelector('#dashboard').classList.contains('hidden'));
     t.querySelector('#newExam').click(); assert.equal(t.querySelector('#questionsView').classList.contains('hidden'), false);
     assert.equal(t.querySelector('[data-view=questions]').getAttribute('aria-selected'), 'true');
-    fill(t.querySelector('#importText'), 'Quiz\n\n1. Pick one\nA. Yes *\nB. No\nC. Maybe'); t.querySelector('#previewImport').click();
+    const input = t.querySelector('#importFile'); const text = 'Quiz\n\n1. Pick one\nA. Yes *\nB. No\nC. Maybe';
+    Object.defineProperty(input, 'files', { configurable:true, value:[{size:text.length, text:async()=>text}] });
+    input.dispatchEvent(new teacherDom.window.Event('change',{bubbles:true})); await wait(()=>t.querySelector('#importText').value === text);
+    t.querySelector('#previewImport').click();
     await wait(()=>t.querySelector('#importPreview button')); assert.match(t.querySelector('#importPreview').textContent, /Correct: Yes/);
     t.querySelector('#importPreview button').click(); assert.equal(t.querySelectorAll('.question-editor .option').length, 3);
     t.querySelector('.question-editor button').click(); t.querySelector('#addQuestion').click();
@@ -33,6 +36,12 @@ test('simplified teacher and student interfaces complete an exam', { skip: !url,
     t.querySelector('#addQuestion').click(); const second = t.querySelectorAll('.question-editor')[1]; fill(second.querySelector('.prompt'),'Second question'); [...second.querySelectorAll('.option')].forEach((x,i)=>fill(x,`Second ${i+1}`));
     t.querySelector('#create').dispatchEvent(new teacherDom.window.Event('submit',{bubbles:true,cancelable:true})); await wait(()=>/Exam created/.test(t.querySelector('#message').textContent));
     const code = t.querySelector('#message').textContent.match(/code ([0-9A-F]+)/)[1];
+    t.querySelector('[data-view=questions]').click(); t.querySelector('#loadBank').click();
+    await wait(()=>/Saved bank loaded/.test(t.querySelector('#draftStatus').textContent));
+    assert.equal(t.querySelectorAll('.question-editor').length,2);
+    fill(t.querySelector('.prompt'),'Edited before join'); t.querySelector('#create').dispatchEvent(new teacherDom.window.Event('submit',{bubbles:true,cancelable:true}));
+    await wait(()=>/Question bank saved/.test(t.querySelector('#message').textContent));
+
     studentDom = new JSDOM(fs.readFileSync(new URL('../public/neon.html', import.meta.url),'utf8'), { url:base+'/' }); use(studentDom); await import('../public/neon-student.js?simple-ui-test'); const s = studentDom.window.document;
     fill(s.querySelector('#code'),code); fill(s.querySelector('#name'),'Test Student'); fill(s.querySelector('#number'),'001'); s.querySelector('#joinForm').dispatchEvent(new studentDom.window.Event('submit',{bubbles:true,cancelable:true}));
     await wait(()=>s.querySelectorAll('.choice input').length===4); const radio=s.querySelector('.choice input'); radio.checked=true; radio.dispatchEvent(new studentDom.window.Event('change',{bubbles:true})); await wait(()=>/Answer saved/.test(s.querySelector('#save').textContent));
@@ -40,7 +49,9 @@ test('simplified teacher and student interfaces complete an exam', { skip: !url,
     const secondRadio = s.querySelector('.choice input'); secondRadio.checked=true; secondRadio.dispatchEvent(new studentDom.window.Event('change',{bubbles:true})); await wait(()=>/Answer saved/.test(s.querySelector('#save').textContent));
     s.querySelector('#prev').click(); assert.equal(s.querySelector('.choice input').checked, true); s.querySelector('#next').click(); s.querySelector('#submit').click();
     await wait(()=>!s.querySelector('#result').classList.contains('hidden')); assert.match(s.querySelector('#score').textContent,/2 \/ 2/);
-    use(teacherDom); t.querySelector('[data-view=results]').click(); await wait(()=>/Test Student/.test(t.querySelector('#resultRows').textContent));
+    use(teacherDom); t.querySelector('[data-view=questions]').click(); t.querySelector('#loadBank').click();
+    await wait(()=>/Question bank locked/.test(t.querySelector('#draftStatus').textContent)); assert.equal(t.querySelector('#saveBank').disabled,true);
+    t.querySelector('[data-view=results]').click(); await wait(()=>/Test Student/.test(t.querySelector('#resultRows').textContent));
     assert.match(t.querySelector('#resultRows').textContent,/2 \/ 2/); assert.equal(t.querySelector('#joinedKpi').textContent, '1');
   } finally {
     teacherDom?.window.close(); studentDom?.window.close(); for (const [key,value] of Object.entries(original)) { if (value === undefined) delete globalThis[key]; else globalThis[key]=value; }

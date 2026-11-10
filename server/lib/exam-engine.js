@@ -114,6 +114,11 @@ export function gradeOne(question, value) {
     return { correct: false, points: 0, pending: false, blank: true };
   }
 
+  // An unkeyed objective item needs a teacher, not an automatic zero.
+  if (['mcq', 'multiselect', 'truefalse'].includes(question.kind) && question.answer == null) {
+    return { correct: null, points: 0, pending: true };
+  }
+
   switch (question.kind) {
     case 'mcq': {
       const chosen = choiceText(question, value);

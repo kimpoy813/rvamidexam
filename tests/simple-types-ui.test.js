@@ -1,0 +1,40 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import {once} from 'node:events';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import pg from 'pg';
+import {JSDOM} from 'jsdom';
+const url=process.env.TEST_DATABASE_URL;
+test('Vercel UI imports sections and supports all question types with retry and manual grading',{skip:!url,timeout:30000},async()=>{
+  const schema='test_'+crypto.randomBytes(8).toString('hex'),admin=new pg.Client({connectionString:url}); await admin.connect(); await admin.query(`CREATE SCHEMA "${schema}"`);
+  const conn=new URL(url); conn.searchParams.set('options',`-csearch_path=${schema}`); process.env.DATABASE_URL=conn.toString();
+  const {default:handler,closeTestPool}=await import('../api/handler.js'); const server=http.createServer(handler); server.listen(0,'127.0.0.1'); await once(server,'listening'); const base=`http://127.0.0.1:${server.address().port}`;
+  const original=Object.fromEntries(['document','sessionStorage','fetch','confirm','window'].map(k=>[k,globalThis[k]])), nativeFetch=globalThis.fetch; let teacherDom,studentDom,failNext=false;
+  function use(dom){globalThis.window=dom.window;globalThis.document=dom.window.document;globalThis.sessionStorage=dom.window.sessionStorage;globalThis.confirm=()=>true;globalThis.fetch=(url,opts)=>{if(failNext && String(url).endsWith('/attempt/answer')){failNext=false;return Promise.resolve(new Response(JSON.stringify({error:'Network failure'}),{status:503,headers:{'content-type':'application/json'}}));} return nativeFetch(String(url).startsWith('/')?base+url:url,opts);};}
+  const wait=async fn=>{for(let i=0;i<100;i++){if(fn())return; await new Promise(r=>setTimeout(r,50));}throw new Error('UI did not reach expected state');};
+  try {
+    teacherDom=new JSDOM(fs.readFileSync(new URL('../public/neon-teacher.html',import.meta.url),'utf8'),{url:base+'/teacher'}); use(teacherDom); await import('../public/neon-teacher.js?types-ui'); const t=teacherDom.window.document;
+    t.querySelector('#username').value='teacher_types';t.querySelector('#password').value='strong-password-123';t.querySelector('#register').click();await wait(()=>/Account created/.test(t.querySelector('#message').textContent));
+    t.querySelector('#login').dispatchEvent(new teacherDom.window.Event('submit',{bubbles:true,cancelable:true}));await wait(()=>!t.querySelector('#dashboard').classList.contains('hidden'));t.querySelector('#newExam').click();
+    const input={title:'Types exam',sections:[{title:'Choices',instructions:'Choose',minutes:1,lock_after:true,questions:[{kind:'mcq',prompt:'One',choices:['A','B'],answer:'B',points:2},{kind:'multiselect',prompt:'Several',choices:['A','B','C'],answer:['A','C'],points:4},{kind:'truefalse',prompt:'True?',answer:'True',points:1}]},{title:'Written',instructions:'Write clearly',questions:[{kind:'short',prompt:'Word',answer:'hello',points:1.5},{kind:'essay',prompt:'Explain',points:5}]}]};
+    t.querySelector('#importText').value=JSON.stringify(input);t.querySelector('#previewImport').click();await wait(()=>t.querySelector('#importPreview button'));t.querySelector('#importPreview button').click();
+    assert.equal(t.querySelectorAll('.part-editor').length,2); assert.equal(t.querySelectorAll('.question-editor').length,5);
+    const multi=t.querySelectorAll('.question-editor')[1]; assert.deepEqual([...multi.querySelector('.answer').selectedOptions].map(o=>o.value),['0','2']);
+    t.querySelector('#lockSections').checked=true; t.querySelector('#shuffleChoices').checked=true;
+    t.querySelector('#create').dispatchEvent(new teacherDom.window.Event('submit',{bubbles:true,cancelable:true})); await wait(()=>/Exam created/.test(t.querySelector('#message').textContent)); const code=t.querySelector('#message').textContent.match(/code ([0-9A-F]+)/)[1];
+    studentDom=new JSDOM(fs.readFileSync(new URL('../public/neon.html',import.meta.url),'utf8'),{url:base+'/'});use(studentDom);await import('../public/neon-student.js?types-ui'); const s=studentDom.window.document;
+    s.querySelector('#code').value=code;s.querySelector('#name').value='Student One';s.querySelector('#number').value='001';s.querySelector('#joinForm').dispatchEvent(new studentDom.window.Event('submit',{bubbles:true,cancelable:true}));
+    await wait(()=>s.querySelectorAll('.choice input').length===2); assert.match(s.querySelector('#sectionTimer').textContent,/Part time/);
+    function pick(text) { const label=[...s.querySelectorAll('.choice')].find(x=>x.textContent.trim()===text);const input=label.querySelector('input');input.checked=true;input.dispatchEvent(new studentDom.window.Event('change',{bubbles:true})); }
+    pick('B');await wait(()=>/Answer saved/.test(s.querySelector('#save').textContent));
+    s.querySelector('#next').click();pick('A');pick('C');await wait(()=>/Answer saved/.test(s.querySelector('#save').textContent));
+    s.querySelector('#next').click();pick('True');await wait(()=>/Answer saved/.test(s.querySelector('#save').textContent));
+    s.querySelector('#next').click();await wait(()=>/Written.*Write clearly/.test(s.querySelector('#questions').textContent));assert.match(s.querySelector('#questions').textContent,/Written.*Write clearly/);assert.equal(s.querySelectorAll('#palette button')[0].disabled,true);let answer=s.querySelector('#questions input');answer.value='hello';answer.dispatchEvent(new studentDom.window.Event('input',{bubbles:true}));await wait(()=>/Answer saved/.test(s.querySelector('#save').textContent));
+    s.querySelector('#next').click();failNext=true;answer=s.querySelector('#questions textarea');answer.value='Essay response';answer.dispatchEvent(new studentDom.window.Event('input',{bubbles:true}));await wait(()=>!s.querySelector('#retrySaves').classList.contains('hidden'));s.querySelector('#submit').click(); await wait(()=>/Retry before submitting/.test(s.querySelector('#message').textContent)); assert.equal(s.querySelector('#result').classList.contains('hidden'),true); s.querySelector('#retrySaves').click();await wait(()=>/Answer saved/.test(s.querySelector('#save').textContent));
+    s.querySelector('#submit').click();await wait(()=>!s.querySelector('#result').classList.contains('hidden'));assert.match(s.querySelector('#score').textContent,/8.5 \/ 13.5.*5 points awaiting/);
+    use(teacherDom);t.querySelector('[data-view=results]').click();await wait(()=>/Student One/.test(t.querySelector('#resultRows').textContent));assert.match(t.querySelector('#resultRows').textContent,/Essay response/);
+    const essayRow=[...t.querySelectorAll('#resultRows li')].find(li=>li.textContent.includes('Explain'));essayRow.querySelector('input').value='4';essayRow.querySelector('button').click();await wait(()=>/Grade saved/.test(t.querySelector('#message').textContent));assert.match(t.querySelector('#resultRows').textContent,/12.5 \/ 13.5/);
+  } finally {teacherDom?.window.close();studentDom?.window.close();for(const [key,value] of Object.entries(original)){if(value===undefined)delete globalThis[key];else globalThis[key]=value;}server.closeAllConnections();await new Promise(r=>server.close(r));await closeTestPool();delete process.env.DATABASE_URL;await admin.query(`DROP SCHEMA "${schema}" CASCADE`);await admin.end();}
+});

@@ -35,7 +35,7 @@ test('original exam bank supports isolated atomic edits and immutable attempt pa
     assert.equal((await getOwnedBlueprint(pool,teacher.id,'exam'))[0].questions.length,5);
     await pool.query(`CREATE FUNCTION fail_bank_insert() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.prompt = 'force failure' THEN RAISE EXCEPTION 'forced failure'; END IF; RETURN NEW; END $$`);
     await pool.query('CREATE TRIGGER fail_bank BEFORE INSERT ON questions FOR EACH ROW EXECUTE FUNCTION fail_bank_insert()');
-    await assert.rejects(replaceOwnedBlueprint(pool,teacher.id,'exam',[{questions:[{prompt:'force failure'}]}]), /forced failure/);
+    await assert.rejects(replaceOwnedBlueprint(pool,teacher.id,'exam',[{questions:[{prompt:'force failure',choices:['A','B'],answer:'A'}]}]), /forced failure/);
     assert.equal((await getOwnedBlueprint(pool,teacher.id,'exam'))[0].questions.length,5, 'failed transaction restores old bank');
     await pool.query('DROP TRIGGER fail_bank ON questions');
     const joined = await Promise.allSettled(Array.from({length:5},()=>joinExam(pool,{code:'abc-234',name:'Student One',number:'001'})));
