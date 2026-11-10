@@ -4,7 +4,7 @@
  */
 import {
   listSessions, getSettings, getExamSettings, getCurrentExamId, now,
-  updateSession, logEvent, getSession, eventsSince, listExams
+  updateSession, logEvent, getSession, eventsSince, listExams, teacherContext, teacherFromToken
 } from './db.js';
 import { buildPaper, gradePaper } from './exam.js';
 import { SseHub } from './http.js';
@@ -281,7 +281,6 @@ export function registerViolation(token, type, detail = '', settings = getSettin
 
 /** Debounced broadcast so a burst of heartbeats does not flood the dashboard. */
 let scheduled = null;
-let lastPayload = '';
 export function broadcastRoster(force = false) {
   if (scheduled && !force) return;
   if (scheduled) {
@@ -290,11 +289,14 @@ export function broadcastRoster(force = false) {
   }
   scheduled = setTimeout(() => {
     scheduled = null;
-    const payload = rosterSnapshot();
-    const encoded = JSON.stringify(payload);
-    if (!force && encoded === lastPayload) return;
-    lastPayload = encoded;
-    hub.send('roster', payload);
+    for (const client of hub.clients) {
+      const teacher = teacherFromToken(client.teacherToken);
+      if (!teacher) { client.end(); hub.clients.delete(client); continue; }
+      try {
+        const payload = teacherContext.run({ teacherId: teacher.id }, () => rosterSnapshot());
+        client.write(`event: roster\ndata: ${JSON.stringify(payload)}\n\n`);
+      } catch (err) { console.error('[exam] roster broadcast failed', err); }
+    }
   }, 250);
   scheduled.unref?.();
 }

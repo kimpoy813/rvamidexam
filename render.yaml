@@ -12,8 +12,8 @@
 # uses `plan: starter` and mounts a disk at the data directory.
 #
 #   • To stay on the free plan instead: remove the `disk:` block, the
-#     EXAM_DATA_DIR env var, and set `plan: free`. Your data will reset on
-#     every deploy/restart.
+#     EXAM_DATA_DIR env var, set `plan: free`, and set
+#     EXAM_ALLOW_EPHEMERAL=true. Data may reset on deploy/restart.
 #   • If you created this service by hand in the Render dashboard instead of
 #     from this blueprint, change the existing service (Dashboard → your
 #     service → Settings → Environment) from "Go" to "Node", set Build Command

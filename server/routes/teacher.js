@@ -9,17 +9,47 @@ import {
   listSessions, updateSession, logEvent, now, eventsFor, getExamBlueprint, replaceExam,
   deleteSessionsExceptKeep, getQuestions, getSections, ensureTeacher,
   listExams, createExam, deleteExam, duplicateExam, findExamByCode, getExam,
-  getStorageInfo, checkpointDatabase
+  getStorageInfo, checkpointDatabase, teacherContext, db
 } from '../lib/db.js';
 import { buildPaper, gradePaper, itemAnalysis, toCsv, normalizeAnswer } from '../lib/exam.js';
 import { HttpError, sendJson, sendText, readJsonBody, readTextBody } from '../lib/http.js';
 import { hub, rosterSnapshot, rosterSnapshotAll, broadcastRoster, finishSession, enforceDeadlines, secondsLeft } from '../lib/live.js';
 import { parseAny, parseExamJson, examToText } from '../lib/importer.js';
 
+// Lightweight per-process throttling; use an edge rate limiter for multi-instance deployments.
+const authAttempts = new Map();
+function throttleAuth(req, action) {
+  const key = `${action}:${req.socket.remoteAddress || 'unknown'}`;
+  const nowMs = Date.now();
+  const recent = (authAttempts.get(key) || []).filter(at => nowMs - at < 15 * 60 * 1000);
+  if (recent.length >= 30) throw new HttpError(429, 'Too many attempts. Please try again later.');
+  recent.push(nowMs);
+  authAttempts.set(key, recent);
+  if (authAttempts.size > 10000) {
+    for (const [k, entries] of authAttempts) if (nowMs - entries.at(-1) >= 15 * 60 * 1000) authAttempts.delete(k);
+  }
+}
+
 export function registerTeacherRoutes(router, { requireAuth }) {
   /* ------------------------------------------------------------------ auth */
 
+  // Public registration creates a separate collection; it never exposes an existing account.
+  router.post('/api/teacher/register', async (req, res) => {
+    throttleAuth(req, 'register');
+    const body = await readJsonBody(req);
+    const username = String(body.username || '').trim();
+    const password = String(body.password || '');
+    if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(username)) throw new HttpError(400, 'Username must be 3–40 letters, numbers, dots, dashes or underscores.');
+    if (password.length < 10 || password.length > 200) throw new HttpError(400, 'Password must be 10–200 characters.');
+    if (db.prepare('SELECT 1 FROM teachers WHERE username = ? COLLATE NOCASE').get(username)) throw new HttpError(409, 'That username is already in use.');
+    const teacher = ensureTeacher(username, password);
+    teacherContext.run({ teacherId: teacher.id }, () => createExam({ title: 'Untitled Exam', settings: { exam_open: '0' } }));
+    const token = issueTeacherToken(teacher.id);
+    sendJson(res, 201, { token, teacher: { username: teacher.username } });
+  });
+
   router.post('/api/teacher/login', async (req, res) => {
+    throttleAuth(req, 'login');
     const body = await readJsonBody(req);
     const username = String(body.username || '').trim();
     const password = String(body.password || '');
@@ -89,7 +119,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
   router.post('/api/teacher/exams/:id/select', (req, res) => {
     requireAuth(req);
     const exam = getExam(req.params.id);
-    if (!exam) throw new HttpError(404, 'Exam not found.');
+    if (!exam || exam.teacher_id !== requireAuth(req).id) throw new HttpError(404, 'Exam not found.');
     setCurrentExamId(exam.id);
     broadcastRoster(true);
     sendJson(res, 200, { exams: listExams(), currentId: exam.id });
@@ -97,6 +127,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
 
   router.post('/api/teacher/exams/:id/duplicate', (req, res) => {
     requireAuth(req);
+    if (getExam(req.params.id)?.teacher_id !== requireAuth(req).id) throw new HttpError(404, 'Exam not found.');
     const copy = duplicateExam(req.params.id);
     broadcastRoster(true);
     sendJson(res, 200, { exams: listExams(), currentId: getCurrentExamId(), exam: copy });
@@ -104,6 +135,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
 
   router.delete('/api/teacher/exams/:id', (req, res) => {
     requireAuth(req);
+    if (getExam(req.params.id)?.teacher_id !== requireAuth(req).id) throw new HttpError(404, 'Exam not found.');
     deleteExam(req.params.id);
     broadcastRoster(true);
     sendJson(res, 200, { exams: listExams(), currentId: getCurrentExamId() });
@@ -115,6 +147,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
     requireAuth(req);
     enforceDeadlines();
     const stream = hub.add(req, res);
+    stream.teacherToken = String(req.headers['x-teacher-token'] || req.query?.t || '');
     stream.write(`event: roster\ndata: ${JSON.stringify(rosterSnapshot())}\n\n`);
   });
 
@@ -132,7 +165,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
   router.get('/api/teacher/session/:token', (req, res) => {
     requireAuth(req);
     const session = getSession(req.params.token);
-    if (!session) throw new HttpError(404, 'Session not found.');
+    if (!session || getExam(session.exam_id)?.teacher_id !== requireAuth(req).id) throw new HttpError(404, 'Session not found.');
 
     const settings = getExamSettings(session.exam_id);
     const paper = buildPaper(session, undefined, settings);
@@ -187,7 +220,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
   router.post('/api/teacher/session/:token/grade', async (req, res) => {
     requireAuth(req);
     const session = getSession(req.params.token);
-    if (!session) throw new HttpError(404, 'Session not found.');
+    if (!session || getExam(session.exam_id)?.teacher_id !== requireAuth(req).id) throw new HttpError(404, 'Session not found.');
     const body = await readJsonBody(req);
     const questionId = String(body.questionId || '');
 
@@ -219,7 +252,7 @@ export function registerTeacherRoutes(router, { requireAuth }) {
   router.post('/api/teacher/session/:token/action', async (req, res) => {
     requireAuth(req);
     const session = getSession(req.params.token);
-    if (!session) throw new HttpError(404, 'Session not found.');
+    if (!session || getExam(session.exam_id)?.teacher_id !== requireAuth(req).id) throw new HttpError(404, 'Session not found.');
     const body = await readJsonBody(req);
     const action = String(body.action || '');
     const settings = getExamSettings(session.exam_id);

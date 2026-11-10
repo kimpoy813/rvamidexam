@@ -10,8 +10,7 @@
  */
 import {
   getSession, createSession, updateSession, getSettings, getExamSettings,
-  getExamBlueprint, findExamByCode, listSessions, logEvent, now, eventsFor,
-  verifyTeacher
+  getExamBlueprint, findExamByCode, listSessions, logEvent, now, eventsFor
 } from '../lib/db.js';
 import { buildPaper, gradePaper } from '../lib/exam.js';
 import { HttpError, sendJson, readJsonBody, clientIp } from '../lib/http.js';
@@ -22,20 +21,13 @@ import {
 export function registerStudentRoutes(router) {
   /* ------------------------------------------------------------- exam info */
 
-  router.get('/api/public/auth-hint', (req, res) => {
-    // Tells the teacher sign-in page whether the well-known default password is
-    // still active, so the "Default: teacher / rvm-exam-2026" hint can hide
-    // itself once the password has been changed in the dashboard.
-    const username = process.env.EXAM_TEACHER_USER || 'teacher';
-    const stillDefault =
-      !process.env.EXAM_TEACHER_PASSWORD && !!verifyTeacher(username, 'rvm-exam-2026');
-    sendJson(res, 200, { showDefaultHint: stillDefault });
-  });
-
   router.get('/api/public/exam-info', (req, res) => {
     enforceDeadlines();
-    const s = getSettings();
-    const paper = getExamBlueprint();
+    const code = String(req.query?.code || '').trim();
+    const exam = code ? findExamByCode(code) : null;
+    if (code && !exam) throw new HttpError(404, 'Exam code not found.');
+    const s = exam ? getExamSettings(exam.id) : getSettings();
+    const paper = getExamBlueprint(exam?.id);
     sendJson(res, 200, {
       title: s.exam_title,
       school: s.school,

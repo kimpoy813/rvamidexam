@@ -385,3 +385,27 @@
   max-width: 230px; cursor: pointer;
 }
 .exam-switch select:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.15); }
+
+/* Dashboard remains usable without a multi-row sticky header covering content. */
+.login-card .card-pad { padding: 36px 32px; }
+.dash { padding-top: 24px; }
+.panel-head h2 { letter-spacing: -.02em; }
+.kpi { box-shadow: var(--shadow); }
+.srow { min-width: 0; }
+@media (max-width: 720px) {
+  #appView > .appbar { position: relative; }
+  #appView .appbar-in { gap: 10px; }
+  #appView .brand { flex: 1 1 150px; }
+  #appView .brand-text { max-width: 180px; }
+  #appView .exam-switch { flex: 1 1 100%; order: 2; min-width: 0; }
+  #appView .exam-switch select { flex: 1; max-width: none; min-width: 0; }
+  #appView .tabs { order: 3; width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  #appView .tab { flex: 1 0 auto; justify-content: center; white-space: nowrap; min-height: 42px; }
+  #appView .appbar-in > .spacer { display: none; }
+  .panel-head { gap: 10px; }
+  .panel-head #rosterSearch { width: 100% !important; flex: 1 1 100%; }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .kpi { min-width: 0; padding: 13px; }
+  .login-wrap { padding: 16px; }
+  .login-card .card-pad { padding: 28px 22px; }
+}

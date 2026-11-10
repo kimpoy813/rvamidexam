@@ -14,15 +14,46 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
+export const teacherContext = new AsyncLocalStorage();
+export const currentTeacherId = () => teacherContext.getStore()?.teacherId || null;
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(__dirname, '..', '..');
 export const DATA_DIR = process.env.EXAM_DATA_DIR || path.join(ROOT, 'data');
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
-
 export const DB_PATH = process.env.EXAM_DB || path.join(DATA_DIR, 'exam.sqlite');
+
+// On Render, never silently initialize a new database on an ephemeral root
+// filesystem when durable storage was expected. An explicit opt-in exists for
+// disposable demos only; it cannot provide persistence.
+if (process.env.RENDER === 'true' || process.env.RENDER_SERVICE_ID) {
+  if (process.env.EXAM_STORAGE_MODE !== 'persistent') {
+    if (process.env.EXAM_ALLOW_EPHEMERAL !== 'true') {
+      throw new Error('Render requires a persistent disk. Set EXAM_DATA_DIR and EXAM_STORAGE_MODE=persistent, or EXAM_ALLOW_EPHEMERAL=true for a disposable demo.');
+    }
+  } else {
+    const dataPath = path.resolve(DATA_DIR);
+    const dbPath = path.resolve(DB_PATH);
+    const relative = path.relative(dataPath, dbPath);
+    if (!relative || relative.startsWith('..' + path.sep) || relative === '..' || path.isAbsolute(relative)) {
+      throw new Error('EXAM_DB must be inside the persistent EXAM_DATA_DIR.');
+    }
+    let mounts;
+    try {
+      mounts = fs.readFileSync('/proc/self/mountinfo', 'utf8').split('\n')
+        .map(line => line.split(' ')[4]?.replace(/\\([0-7]{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8))));
+    } catch {
+      throw new Error('Cannot verify the Render persistent disk mount.');
+    }
+    if (!mounts.includes(dataPath)) {
+      throw new Error(`Persistent disk is not mounted at EXAM_DATA_DIR (${dataPath}); refusing to create a temporary database.`);
+    }
+  }
+}
+
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
 export const db = new DatabaseSync(DB_PATH);
 
@@ -135,6 +166,8 @@ CREATE TABLE IF NOT EXISTS teacher_tokens (
 const hasColumn = (table, col) =>
   db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col);
 
+if (!hasColumn('exams', 'teacher_id')) db.exec('ALTER TABLE exams ADD COLUMN teacher_id INTEGER REFERENCES teachers(id)');
+
 if (!hasColumn('sections', 'exam_id')) {
   db.exec('ALTER TABLE sections ADD COLUMN exam_id TEXT');
 }
@@ -238,6 +271,15 @@ function settingsFor(examId) {
 /* ------------------------------------------------------------ exam routing */
 
 export function getCurrentExamId() {
+  const teacherId = currentTeacherId();
+  if (teacherId) {
+    const key = `teacher_current_exam_${teacherId}`;
+    const pointer = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    if (pointer && db.prepare('SELECT 1 FROM exams WHERE id = ? AND teacher_id = ?').get(pointer.value, teacherId)) return pointer.value;
+    const first = db.prepare('SELECT id FROM exams WHERE teacher_id = ? ORDER BY created_at, rowid').get(teacherId);
+    if (first) setCurrentExamId(first.id);
+    return first?.id || null;
+  }
   const pointer = stmtGetPointer.get();
   if (pointer?.value) {
     const exists = db.prepare('SELECT 1 AS ok FROM exams WHERE id = ?').get(pointer.value);
@@ -253,6 +295,12 @@ export function getCurrentExamId() {
 
 export function setCurrentExamId(id) {
   if (!id) return;
+  const teacherId = currentTeacherId();
+  if (teacherId) {
+    if (!db.prepare('SELECT 1 FROM exams WHERE id = ? AND teacher_id = ?').get(id, teacherId)) return;
+    db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(`teacher_current_exam_${teacherId}`, id);
+    return;
+  }
   stmtSetPointer.run(id);
 }
 
@@ -271,7 +319,8 @@ export function findExamByCode(code) {
 
 export function listExams() {
   const currentId = getCurrentExamId();
-  return db.prepare('SELECT * FROM exams ORDER BY created_at ASC, rowid ASC').all().map((e) => {
+  const rows = currentTeacherId() ? db.prepare('SELECT * FROM exams WHERE teacher_id = ? ORDER BY created_at ASC, rowid ASC').all(currentTeacherId()) : db.prepare('SELECT * FROM exams ORDER BY created_at ASC, rowid ASC').all();
+  return rows.map((e) => {
     const blueprint = getExamBlueprint(e.id);
     return {
       id: e.id,
@@ -307,14 +356,14 @@ export function createExam({ title = 'Untitled Exam', access_code, settings = {}
   const id = uid('ex_');
   const code = uniqueAccessCode(access_code);
   const merged = { ...DEFAULT_SETTINGS, ...settings, access_code: code };
-  db.prepare('INSERT INTO exams(id, title, access_code, settings, created_at) VALUES(?,?,?,?,?)')
-    .run(id, title, code, JSON.stringify(merged), now());
+  db.prepare('INSERT INTO exams(id, title, access_code, settings, created_at, teacher_id) VALUES(?,?,?,?,?,?)')
+    .run(id, title, code, JSON.stringify(merged), now(), currentTeacherId());
   setCurrentExamId(id);
   return getExam(id);
 }
 
 export function deleteExam(id) {
-  const count = db.prepare('SELECT COUNT(*) AS c FROM exams').get().c;
+  const count = currentTeacherId() ? db.prepare('SELECT COUNT(*) AS c FROM exams WHERE teacher_id = ?').get(currentTeacherId()).c : db.prepare('SELECT COUNT(*) AS c FROM exams').get().c;
   if (count <= 1) throw new Error('You need at least one exam.');
   db.exec('BEGIN');
   try {
@@ -614,7 +663,7 @@ export function listSessions(filter) {
       .prepare(`SELECT ${SESSION_COLUMNS} FROM sessions WHERE access_code = ? ORDER BY created_at ASC`)
       .all(filter);
   } else {
-    rows = db.prepare(`SELECT ${SESSION_COLUMNS} FROM sessions ORDER BY created_at ASC`).all();
+    rows = currentTeacherId() ? db.prepare(`SELECT ${SESSION_COLUMNS} FROM sessions WHERE exam_id IN (SELECT id FROM exams WHERE teacher_id = ?) ORDER BY created_at ASC`).all(currentTeacherId()) : db.prepare(`SELECT ${SESSION_COLUMNS} FROM sessions ORDER BY created_at ASC`).all();
   }
   return rows.map(hydrateSession);
 }
