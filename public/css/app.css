@@ -463,3 +463,33 @@ tbody tr.clickable:hover { background: #f8faff; }
   .appbar-in { padding: 10px 13px; gap: 9px; }
   .brand span.brand-text { display: none; }
 }
+
+/* Refinements shared across the student and teacher experiences. */
+:root {
+  --bg: #f3f5f9;
+  --ink: #182338;
+  --muted: #58677e;
+  --line: #e0e6ef;
+  --surface-2: #f7f9fc;
+  --shadow: 0 14px 36px -20px rgba(24, 35, 56, .22), 0 3px 10px rgba(24, 35, 56, .04);
+}
+body {
+  background: radial-gradient(850px 480px at 0% 0%, #e8eafa 0%, transparent 70%),
+              radial-gradient(650px 430px at 100% 0%, #eef2fb 0%, transparent 70%), var(--bg);
+}
+.card { box-shadow: var(--shadow); }
+.btn { min-height: 42px; }
+.btn-sm { min-height: 36px; }
+input, select, textarea { max-width: 100%; }
+.table-wrap { -webkit-overflow-scrolling: touch; }
+@media (max-width: 720px) {
+  input, select, textarea { font-size: 16px !important; }
+  .appbar-in { gap: 8px; }
+  .brand span.brand-text { display: block; }
+  .brand { min-width: 0; }
+  .brand > div:last-child { min-width: 0; }
+  .brand-text, .brand-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

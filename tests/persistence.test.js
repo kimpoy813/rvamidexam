@@ -201,3 +201,46 @@ test('an intentionally empty question bank stays empty after restart', { timeout
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('teacher accounts own isolated exams and keep them after restart', { timeout: 25000 }, async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'rvm-accounts-'));
+  let first, second;
+  try {
+    const port = await freePort();
+    first = launch(dir, port);
+    await first.ready;
+    const base = `http://127.0.0.1:${port}`;
+    const original = await login(base);
+    const oldExam = (await request(base, '/api/teacher/exams', { token: original })).exams[0];
+    const joined = await request(base, '/api/sessions', { method: 'POST', body: { access_code: oldExam.access_code, student_name: 'Sample Student', student_no: '123' } });
+    const created = await request(base, '/api/teacher/register', { method: 'POST', body: { username: 'teacher_two', password: 'a-strong-password' } });
+    const other = created.token;
+    const list = await request(base, '/api/teacher/exams', { token: other });
+    assert.equal(list.exams.length, 1);
+    assert.notEqual(list.exams[0].id, oldExam.id);
+    const roster = await request(base, '/api/teacher/roster?all=1', { token: other });
+    assert.equal(roster.students.length, 0);
+    const hiddenSession = await fetch(`${base}/api/teacher/session/${joined.token}`, { headers: { 'X-Teacher-Token': other } });
+    assert.equal(hiddenSession.status, 404);
+    const hiddenResults = await request(base, '/api/teacher/results', { token: other });
+    assert.equal(hiddenResults.total, 0);
+    const forbidden = await fetch(`${base}/api/teacher/exams/${oldExam.id}/select`, { method: 'POST', headers: { 'X-Teacher-Token': other } });
+    assert.equal(forbidden.status, 404);
+    const forbiddenDelete = await fetch(`${base}/api/teacher/exams/${oldExam.id}`, { method: 'DELETE', headers: { 'X-Teacher-Token': other } });
+    assert.equal(forbiddenDelete.status, 404);
+    await request(base, '/api/teacher/settings', { method: 'POST', token: other, body: { exam_title: 'Second teacher exam' } });
+    assert.notEqual((await request(base, '/api/teacher/settings', { token: original })).exam_title, 'Second teacher exam');
+    await stop(first);
+    const port2 = await freePort();
+    second = launch(dir, port2);
+    await second.ready;
+    const base2 = `http://127.0.0.1:${port2}`;
+    const again = await request(base2, '/api/teacher/login', { method: 'POST', body: { username: 'teacher_two', password: 'a-strong-password' } });
+    assert.equal((await request(base2, '/api/teacher/settings', { token: again.token })).exam_title, 'Second teacher exam');
+    assert.equal((await request(base2, '/api/teacher/exams', { token: await login(base2) })).exams[0].id, oldExam.id);
+  } finally {
+    if (first) await stop(first).catch(() => first.child.kill('SIGKILL'));
+    if (second) await stop(second).catch(() => second.child.kill('SIGKILL'));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

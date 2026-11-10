@@ -219,6 +219,33 @@ $('#examSelect').addEventListener('change', (e) => switchExam(e.target.value));
 $('#newExamBtn').addEventListener('click', newExam);
 $('#newExamBtn2').addEventListener('click', newExam);
 
+$('#showRegister').addEventListener('click', () => {
+  $('#authTitle').textContent = 'Create teacher account';
+  $('#loginForm').classList.add('hidden');
+  $('#showRegister').classList.add('hidden');
+  $('#registerForm').classList.remove('hidden');
+  $('#rUser').focus();
+});
+$('#showLogin').addEventListener('click', () => {
+  $('#authTitle').textContent = 'Teacher sign in';
+  $('#registerForm').classList.add('hidden');
+  $('#loginForm').classList.remove('hidden');
+  $('#showRegister').classList.remove('hidden');
+  $('#lUser').focus();
+});
+$('#registerForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if ($('#rPass').value !== $('#rConfirm').value) return toast('Passwords do not match.', 'bad');
+  const button = e.currentTarget.querySelector('[type="submit"]');
+  button.disabled = true;
+  try {
+    const res = await api('/api/teacher/register', { method: 'POST', body: { username: $('#rUser').value.trim(), password: $('#rPass').value } });
+    localStorage.setItem('rvm_teacher_token', res.token);
+    location.reload();
+  } catch (err) { toast(err.message, 'bad'); }
+  finally { button.disabled = false; }
+});
+
 $('#loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {

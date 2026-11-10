@@ -15,7 +15,7 @@
   <div class="card login-card">
     <div class="card-pad">
       <div class="login-mark">T</div>
-      <h1 style="font-size:22px">Teacher sign in</h1>
+      <h1 id="authTitle" style="font-size:22px">Teacher sign in</h1>
       <p class="muted small" style="margin-top:6px">
         Monitor your class live, review responses and release scores.
       </p>
@@ -31,6 +31,14 @@
         <button class="btn btn-primary btn-lg btn-block" type="submit" style="margin-top:18px">
           Sign in
         </button>
+      </form>
+      <button type="button" class="btn btn-ghost btn-block" id="showRegister" style="margin-top:12px">Create a teacher account</button>
+      <form id="registerForm" class="hidden" style="margin-top:22px">
+        <div class="field"><label for="rUser">Choose a username</label><input id="rUser" autocomplete="username" minlength="3" maxlength="40" required></div>
+        <div class="field"><label for="rPass">Choose a password</label><input id="rPass" type="password" autocomplete="new-password" minlength="10" maxlength="200" required><p class="hint">Use at least 10 characters.</p></div>
+        <div class="field"><label for="rConfirm">Confirm password</label><input id="rConfirm" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></div>
+        <button class="btn btn-primary btn-block" type="submit" style="margin-top:18px">Create account</button>
+        <button class="btn btn-ghost btn-block" type="button" id="showLogin" style="margin-top:10px">Back to sign in</button>
       </form>
     </div>
   </div>
@@ -50,7 +58,7 @@
       </div>
 
       <div class="exam-switch">
-        <select id="examSelect" title="Active exam"></select>
+        <select id="examSelect" aria-label="Active exam" title="Active exam"></select>
         <button class="btn btn-ghost btn-sm" id="newExamBtn" type="button">+ New</button>
       </div>
 
@@ -67,7 +75,7 @@
 
       <span class="conn" id="conn"><i></i><span id="connText">Connecting…</span></span>
 
-      <div class="tabs" role="tablist">
+      <div class="tabs" role="tablist" aria-label="Teacher dashboard sections">
         <button class="tab" role="tab" data-tab="live" aria-selected="true">Live monitor</button>
         <button class="tab" role="tab" data-tab="results" aria-selected="false">Results <span class="count hidden" id="tabManual">0</span></button>
         <button class="tab" role="tab" data-tab="questions" aria-selected="false">Questions</button>
@@ -95,9 +103,9 @@
               <option value="current">This exam</option>
               <option value="all">All exams</option>
             </select>
-            <input type="text" id="rosterSearch" placeholder="Search name or number…"
+            <input type="text" id="rosterSearch" aria-label="Search students" placeholder="Search name or number…"
                    style="width:210px;padding:7px 11px;font-size:13.5px">
-            <select id="rosterFilter" style="width:auto;padding:7px 11px;font-size:13.5px">
+            <select id="rosterFilter" aria-label="Filter students" style="width:auto;padding:7px 11px;font-size:13.5px">
               <option value="all">Everyone</option>
               <option value="online">Online now</option>
               <option value="active">In progress</option>

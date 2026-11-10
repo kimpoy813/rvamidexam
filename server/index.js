@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   db, getSettings, setSettings, ensureTeacher, makeAccessCode,
   getExamBlueprint, replaceExam, now, ensureExamExists, getCurrentExamId, listExams,
-  checkpointDatabase, getStorageInfo
+  checkpointDatabase, getStorageInfo, teacherContext, teacherFromToken
 } from './lib/db.js';
 import { createRouter, sendJson, serveStatic, HttpError } from './lib/http.js';
 import { registerStudentRoutes } from './routes/student.js';
@@ -27,12 +27,14 @@ const HOST = process.env.HOST || '0.0.0.0';
 function bootstrap() {
   const username = process.env.EXAM_TEACHER_USER || 'teacher';
   const password = process.env.EXAM_TEACHER_PASSWORD || 'rvm-exam-2026';
-  ensureTeacher(username, password);
+  const initialTeacher = ensureTeacher(username, password);
   // Seed only a genuinely new store, never an existing or migrated empty bank.
   const fresh = db.prepare("SELECT COUNT(*) AS n FROM exams").get().n === 0
     && db.prepare("SELECT COUNT(*) AS n FROM sections").get().n === 0
     && db.prepare("SELECT COUNT(*) AS n FROM settings WHERE key NOT IN ('storage_id', 'current_exam_id')").get().n === 0;
   const examId = ensureExamExists();
+  // Existing installations belonged to the original account.
+  db.prepare("UPDATE exams SET teacher_id = ? WHERE teacher_id IS NULL").run(initialTeacher.id);
   if (fresh) {
     replaceExam(SAMPLE_EXAM, examId);
     console.log('[exam] No question bank found — loaded the sample exam.');
@@ -65,7 +67,9 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (url.pathname.startsWith('/api/')) {
-      const handled = await router.handle(req, res, url);
+      const token = req.headers['x-teacher-token'] || req.query?.t || '';
+      const teacher = url.pathname.startsWith('/api/teacher/') ? teacherFromToken(String(token)) : null;
+      const handled = await teacherContext.run({ teacherId: teacher?.id || null }, () => router.handle(req, res, url));
       if (handled === false) throw new HttpError(404, 'Unknown endpoint');
       return;
     }

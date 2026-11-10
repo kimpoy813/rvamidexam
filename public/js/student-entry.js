@@ -3,12 +3,20 @@ import { api, toast, fmtClock } from './util.js';
 const $ = (s) => document.querySelector(s);
 
 let info = null;
+let infoRequest = 0;
+let clockStarted = false;
 
-async function loadInfo() {
+async function loadInfo(code = '') {
+  const requestId = ++infoRequest;
   try {
-    info = await api('/api/public/exam-info');
+    const loaded = await api('/api/public/exam-info' + (code ? `?code=${encodeURIComponent(code)}` : ''));
+    if (requestId !== infoRequest) return;
+    info = loaded;
   } catch (err) {
-    $('#heroTitle').textContent = 'Cannot reach the exam server';
+    if (requestId !== infoRequest) return;
+    info = null;
+    $('#startBtn').disabled = true;
+    $('#heroTitle').textContent = code ? 'Exam not found' : 'Cannot reach the exam server';
     $('#heroMeta').textContent = err.message;
     return;
   }
@@ -28,13 +36,17 @@ async function loadInfo() {
     { k: 'Sections', v: info.sections.length }
   ].map((s) => `<div class="hero-stat"><div class="v">${s.v}</div><div class="k">${s.k}</div></div>`).join('');
 
+  $('#teacherNote')?.remove();
   if (info.proctorNotes) {
     const li = document.createElement('li');
+    li.id = 'teacherNote';
     li.innerHTML = `<b>From your teacher:</b> ${info.proctorNotes.replace(/[<>]/g, '')}`;
     $('#rulesList').prepend(li);
   }
 
   // These two rules depend on how the teacher has configured the exam.
+  $('#ruleNavigate').innerHTML = '<b>You can go back.</b> Move between parts freely and change an answer any time before you submit.';
+  $('#ruleScores').innerHTML = '<b>Scores are not shown on screen.</b> Your teacher will release the results.';
   if (info.lockSections) {
     $('#ruleNavigate').innerHTML =
       '<b>Sections lock.</b> Once you move past a section you cannot return to it.';
@@ -44,6 +56,7 @@ async function loadInfo() {
       '<b>Your score is shown when you submit.</b> You can review each item afterwards.';
   }
 
+  $('.banner-closed')?.remove();
   if (!info.examOpen) {
     const banner = document.createElement('div');
     banner.className = 'banner-closed';
@@ -52,8 +65,10 @@ async function loadInfo() {
     $('#startBtn').disabled = true;
   }
 
+  // The rules may have been accepted while the exam information was loading.
+  $('#startBtn').disabled = !$('#fAgree').checked || !info.examOpen;
   tickClock();
-  setInterval(tickClock, 1000);
+  if (!clockStarted) { setInterval(tickClock, 1000); clockStarted = true; }
 }
 
 function tickClock() {
@@ -66,9 +81,16 @@ const agree = $('#fAgree');
 const startBtn = $('#startBtn');
 agree.addEventListener('change', () => { startBtn.disabled = !agree.checked || !info?.examOpen; });
 
+let codeTimer;
 $('#fCode').addEventListener('input', (e) => {
   const v = e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, '');
   e.target.value = v.length === 3 && !v.includes('-') ? v + '-' : v;
+  clearTimeout(codeTimer);
+  infoRequest++; // Invalidate any request for a previous code.
+  info = null;
+  startBtn.disabled = true;
+  const code = e.target.value.trim();
+  codeTimer = setTimeout(() => loadInfo(code), code ? 350 : 0);
 });
 
 $('#joinForm').addEventListener('submit', async (e) => {

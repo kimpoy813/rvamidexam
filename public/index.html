@@ -23,7 +23,8 @@
         </div>
       </div>
 
-      <h1 id="heroTitle" style="margin-top:26px">Loading exam…</h1>
+      <p class="entry-eyebrow">Student examination portal</p>
+      <h1 id="heroTitle">Loading exam…</h1>
       <p class="muted" id="heroMeta" style="margin-top:8px">&nbsp;</p>
 
       <div class="hero-stats" id="heroStats"></div>
@@ -46,9 +47,10 @@
     <!-- ------------------------------------------------------- right: form -->
     <section class="card entry-panel">
       <div class="card-pad">
-        <h2>Enter the examination</h2>
+        <div class="panel-kicker"><span class="panel-kicker-dot"></span> Student check-in</div>
+        <h2>Ready to begin?</h2>
         <p class="muted small" style="margin-top:4px">
-          Get the access code from your teacher before you start.
+          Enter your details below. Your teacher will provide the access code.
         </p>
 
         <form id="joinForm" style="margin-top:22px" autocomplete="off">
@@ -60,7 +62,7 @@
 
           <div class="field">
             <label for="fName">Full name <span class="muted">(as it appears in the class record)</span></label>
-            <input id="fName" type="text" placeholder="e.g. Maria Santos" required maxlength="80">
+            <input id="fName" type="text" autocomplete="name" placeholder="e.g. Maria Santos" required maxlength="80">
           </div>
 
           <div class="two-col">

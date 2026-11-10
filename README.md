@@ -409,6 +409,21 @@ creating a fresh database on an ephemeral filesystem. For disposable demos
 only, set `EXAM_ALLOW_EPHEMERAL=true`; all data can still be lost. Attaching a
 disk cannot recover data already lost from the old ephemeral filesystem.
 
+### Teacher accounts
+
+Teachers can create their own accounts at `/teacher`. Each account has its own
+exam collection, selected exam, student attempts, results and live roster.
+Existing exams and attempts are assigned to the original teacher account on
+upgrade. New accounts start with a closed, empty exam; add questions and open it before
+sharing its access code. Students can enter that code to load the correct exam details.
+
+Registration is open to anyone who knows the teacher page URL. There is no
+email verification, password recovery or administrative approval. Use strong,
+unique passwords and protect the original teacher account. Login and signup
+have a basic per-process rate limit; use a reverse proxy or edge rate limiter
+for stronger protection in public deployments. SQLite and its persistent disk
+remain necessary to retain accounts and data.
+
 ## Configuration
 
 | Variable | Default | Purpose |

@@ -23,8 +23,11 @@ export function registerStudentRoutes(router) {
 
   router.get('/api/public/exam-info', (req, res) => {
     enforceDeadlines();
-    const s = getSettings();
-    const paper = getExamBlueprint();
+    const code = String(req.query?.code || '').trim();
+    const exam = code ? findExamByCode(code) : null;
+    if (code && !exam) throw new HttpError(404, 'Exam code not found.');
+    const s = exam ? getExamSettings(exam.id) : getSettings();
+    const paper = getExamBlueprint(exam?.id);
     sendJson(res, 200, {
       title: s.exam_title,
       school: s.school,
