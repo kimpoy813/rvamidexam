@@ -435,3 +435,40 @@ remain necessary to retain accounts and data.
 | `EXAM_ALLOW_EPHEMERAL` | _(unset)_ | set to `true` to allow disposable Render deployments without a disk (data can be lost) |
 | `EXAM_TEACHER_USER` | `teacher` | teacher username |
 | `EXAM_TEACHER_PASSWORD` | `rvm-exam-2026` | teacher password used at first boot only |
+
+## Vercel + Neon: simplified exam app
+
+The Vercel deployment has a separate, smaller version of the app. It supports
+teacher self-registration, multiple-choice exams, individual answer autosaves,
+and teacher results. It does **not** include the original app's live proctoring,
+question imports, essay grading, or data migration from SQLite. Students see
+their score after submitting. Existing SQLite accounts and exams will not
+appear in this version; it uses separate `simple_*` PostgreSQL tables.
+
+1. Connect this repository to Vercel and connect a Neon PostgreSQL database.
+   Set a **pooled** Neon connection string as the sensitive `DATABASE_URL`
+   environment variable for the intended deployment environments. Never put
+   it in source control. The database role needs permission to create tables
+   and indexes on first use.
+2. Deploy this branch after review. Open `/teacher` to create a teacher
+   account. Create a multiple-choice exam and share its code with students;
+   students open `/`. Closing an exam prevents new joins but does not end
+   existing attempts.
+3. Answers save as each choice is selected. Students must keep the same tab
+   to resume after a reload; this first version cannot resume on a different
+   browser or device. Expired attempts are scored on the next student request
+   or when the teacher opens results, rather than by a background timer.
+4. Test with a small class before relying on it, monitor Neon/Vercel free-tier
+   quotas, and make independent database backups. Free services have usage and
+   availability limits. Registration is open; there is no email verification or
+   password recovery.
+
+The PostgreSQL integration test is opt-in and requires a **disposable** test
+database with permission to create and drop schemas:
+
+```sh
+TEST_DATABASE_URL='postgresql://...' node --test tests/simple-neon.test.js
+```
+
+Do not run this test against a production database. Without `TEST_DATABASE_URL`
+it is skipped. `npm test` still exercises the existing SQLite application.

@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "routes": [
+    { "src": "^/$", "dest": "/neon.html" },
+    { "src": "^/teacher/?$", "dest": "/neon-teacher.html" },
+    { "src": "^/api/(simple/.*)$", "dest": "/api/handler?path=$1" },
+    { "handle": "filesystem" }
+  ]
+}

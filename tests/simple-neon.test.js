@@ -1,0 +1,62 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { once } from 'node:events';
+import crypto from 'node:crypto';
+import pg from 'pg';
+
+const url = process.env.TEST_DATABASE_URL;
+test('serverless exam workflow survives concurrent saves and isolates teachers', { skip: !url, timeout: 90000 }, async () => {
+  const schema = 'test_' + crypto.randomBytes(8).toString('hex');
+  const admin = new pg.Client({ connectionString:url }); await admin.connect();
+  await admin.query(`CREATE SCHEMA "${schema}"`);
+  const connection = new URL(url); connection.searchParams.set('options', `-csearch_path=${schema}`); process.env.DATABASE_URL = connection.toString();
+  const { default: handler, closeTestPool } = await import('../api/handler.js');
+  const server = http.createServer(handler); server.listen(0, '127.0.0.1'); await once(server,'listening'); const base = `http://127.0.0.1:${server.address().port}/api/simple/`;
+  const call = async (path, body, token, studentToken) => { const r = await fetch(base+path, { method:body === undefined ? 'GET' : 'POST', headers:{ ...(body === undefined ? {} : { 'Content-Type':'application/json' }), ...(token ? { 'X-Teacher-Token':token } : {}), ...(studentToken ? { 'X-Exam-Token':studentToken } : {}) }, ...(body === undefined ? {} : { body:JSON.stringify(body) }) }); return { status:r.status, data:await r.json() }; };
+  try {
+    const rewritten = await fetch(`http://127.0.0.1:${server.address().port}/api/handler?path=simple%2Fme`);
+    assert.equal(rewritten.status, 401, 'Vercel-style rewritten path reaches the API');
+    assert.equal((await call('register', { username:'teacher_one', password:'very-strong-password' })).status, 201);
+    assert.equal((await call('register', { username:'TEACHER_ONE', password:'very-strong-password' })).status, 409);
+    assert.equal((await call('login', { username:'teacher_one', password:'incorrect' })).status, 401);
+    const teacher = (await call('login', { username:'teacher_one', password:'very-strong-password' })).data.token; assert.ok(teacher);
+    await call('register', { username:'teacher_two', password:'very-strong-password' });
+    const other = (await call('login', { username:'teacher_two', password:'very-strong-password' })).data.token;
+    const created = await call('exams', { title:'Math', duration:10, questions:[{ prompt:'One plus one?', choices:['1','2','3'], answer:1 },{ prompt:'Two plus two?', choices:['4','5'], answer:0 }] }, teacher);
+    assert.equal(created.status,201,JSON.stringify(created.data)); const exam = created.data;
+    assert.equal((await call(`exams/${exam.id}/results`, undefined, other)).status,404);
+    assert.equal((await call(`exams/${exam.id}/open`, {open:false}, other)).status,404);
+    assert.equal((await call('exams',undefined,other)).data.exams.length,0);
+    const joined = await Promise.all(Array.from({length:50},(_,i)=>call('join',{ code:exam.code,name:`Student ${i}`,number:`N-${i}` })));
+    assert.ok(joined.every(x=>x.status===201), JSON.stringify(joined.find(x=>x.status!==201)));
+    const attempts = await Promise.all(joined.map(x=>call('attempt',undefined,undefined,x.data.token)));
+    assert.ok(attempts.every(x=>x.status===200));
+    assert.ok(attempts.every(x=>!JSON.stringify(x.data.questions).includes('"answer"')));
+    const saves = await Promise.all(joined.flatMap((entry,i)=>attempts[i].data.questions.map((q,n)=>call('attempt/answer',{questionId:q.id,answer:n===0 ? 1:0},undefined,entry.data.token))));
+    assert.ok(saves.every(x=>x.status===200), JSON.stringify(saves.find(x=>x.status!==200)));
+    const submitted = await Promise.all(joined.map(x=>call('attempt/submit',{},undefined,x.data.token)));
+    assert.ok(submitted.every(x=>x.status===200 && x.data.score===2),JSON.stringify(submitted.find(x=>x.status!==200 || x.data.score!==2)));
+    await closeTestPool(); // Simulate a serverless instance restart.
+    const resumed = await call('attempt', undefined, undefined, joined[0].data.token);
+    assert.equal(resumed.data.submitted, true); assert.equal(resumed.data.score, 2);
+    const results = await call(`exams/${exam.id}/results`,undefined,teacher);
+    assert.equal(results.status,200,JSON.stringify(results.data)); assert.equal(results.data.results.length,50); assert.ok(results.data.results.every(x=>x.score===2));
+    assert.equal(Object.keys(results.data.results[0].answers).length, 2);
+    const late = await call('join',{code:exam.code,name:'Late Student',number:'LATE'});
+    assert.equal(late.status,201);
+    const lateAttempt = await call('attempt',undefined,undefined,late.data.token);
+    assert.equal((await call('attempt/answer',{questionId:lateAttempt.data.questions[0].id,answer:1},undefined,late.data.token)).status,200);
+    await admin.query(`UPDATE "${schema}".simple_attempts SET deadline=now()-interval '1 second' WHERE token_hash=$1`, [crypto.createHash('sha256').update(late.data.token).digest('hex')]);
+    const expiredResults = await call(`exams/${exam.id}/results`,undefined,teacher);
+    const lateResult = expiredResults.data.results.find(row=>row.student_no==='LATE');
+    assert.equal(lateResult.score,1); assert.ok(lateResult.submitted_at);
+    assert.equal((await call('attempt/answer',{questionId:lateAttempt.data.questions[1].id,answer:0},undefined,late.data.token)).status,409);
+    assert.equal((await call(`exams/${exam.id}/open`, {open:false}, teacher)).status,200);
+    assert.equal((await call('join',{code:exam.code,name:'New Student',number:'NEW'})).status,404);
+    assert.equal((await call('attempt/answer',{questionId:attempts[0].data.questions[0].id,answer:0},undefined,joined[0].data.token)).status,409);
+  } finally {
+    server.closeAllConnections(); await new Promise(resolve=>server.close(resolve)); await closeTestPool(); delete process.env.DATABASE_URL;
+    await admin.query(`DROP SCHEMA "${schema}" CASCADE`); await admin.end();
+  }
+});
