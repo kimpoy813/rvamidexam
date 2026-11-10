@@ -308,7 +308,15 @@ test('the student entry form validates the access code', async (t) => {
   await import(`${path.join(work, 'entry.js')}?r=${Math.random()}`);
   await settle(200);
 
-  assert.equal($(win, '#heroTitle').textContent, 'Midterm Examination (SAMPLE)');
+  assert.equal($(win, '#heroTitle').textContent, 'Final Examination');
+  assert.equal(win.document.querySelector('a[href="/teacher"], a[href="/admin"]'), null);
+  const lookup=win.document.querySelector('#scoreLookup');
+  $(win, '#lookupCode').value=accessCode; $(win, '#lookupNumber').value='unknown';
+  lookup.dispatchEvent(new win.Event('submit',{bubbles:true,cancelable:true}));
+  await settle(150);
+  assert.match($(win, '#lookupResult').textContent,/No released score/);
+  assert.match(win.document.querySelector('#scoreLookupPanel').textContent,/Anyone who knows both/);
+
   assert.ok($(win, '#startBtn').disabled, 'the start button needs the honesty checkbox first');
   assert.match($(win, '.hero-stats').textContent, /60 min/);
 

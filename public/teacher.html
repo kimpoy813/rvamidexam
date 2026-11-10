@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Teacher Dashboard — Midterm Examination</title>
+<title>Teacher Dashboard — Final Examination</title>
 <link rel="stylesheet" href="/css/app.css">
 <link rel="stylesheet" href="/css/teacher.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%234f46e5'/><text x='50' y='68' font-size='52' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'>T</text></svg>">
@@ -52,7 +52,7 @@
       <div class="brand">
         <div class="brand-mark">EX</div>
         <div>
-          <span class="brand-text" id="dTitle">Midterm Examination</span>
+          <span class="brand-text" id="dTitle">Final Examination</span>
           <span class="brand-sub" id="dSub">Teacher dashboard</span>
         </div>
       </div>
@@ -303,8 +303,8 @@
 
               <div class="row-between" style="border-top:1px solid var(--line-2);padding-top:14px">
                 <div>
-                  <div style="font-weight:650;font-size:14px">Show results to students</div>
-                  <div class="tiny muted">Otherwise they only see a confirmation.</div>
+                  <div style="font-weight:650;font-size:14px">Release results to students</div>
+                  <div class="tiny muted">Students can look up scores with the exam code and student ID. Anyone with both can view them.</div>
                 </div>
                 <label class="switch"><input type="checkbox" id="sShow"><span class="track"></span><span></span></label>
               </div>
@@ -384,6 +384,9 @@
               </div>
             </div>
             <div class="field" style="margin-top:12px">
+              <label for="bankFile">Load question file (JSON or text)</label>
+              <input id="bankFile" type="file" accept=".json,.txt,.csv,application/json,text/plain,text/csv">
+              <p class="tiny muted">Loading a file fills the text box. Preview and save to replace the selected bank.</p>
               <label for="bankText">Exam text</label>
               <textarea id="bankText" rows="14" spellcheck="false" style="font-family:var(--mono);font-size:13px"></textarea>
             </div>
@@ -425,5 +428,6 @@
 <div id="drawerHost"></div>
 
 <script type="module" src="/js/teacher.js"></script>
+<script type="module" src="/js/render-icons.js"></script>
 </body>
 </html>

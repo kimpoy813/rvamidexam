@@ -234,7 +234,7 @@ export function makeAccessCode() {
 /* --------------------------------------------------------------- settings */
 
 const DEFAULT_SETTINGS = {
-  exam_title: 'Midterm Examination',
+  exam_title: 'Final Examination',
   school: 'RVM',
   subject: '',
   term: '',
@@ -398,7 +398,7 @@ export function ensureExamExists() {
   migrateLegacy();
   const existing = getCurrentExamId();
   if (existing) return existing;
-  return createExam({ title: 'Midterm Examination', access_code: makeAccessCode() }).id;
+  return createExam({ title: 'Final Examination', access_code: makeAccessCode() }).id;
 }
 
 function migrateLegacy() {
@@ -415,7 +415,7 @@ function migrateLegacy() {
 
   const legacy = {};
   for (const r of legacyRows) legacy[r.key] = r.value;
-  const title = legacy.exam_title || 'Midterm Examination';
+  const title = legacy.exam_title || 'Final Examination';
   const code = legacy.access_code || makeAccessCode();
 
   const id = uid('ex_');

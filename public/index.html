@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Midterm Examination — Student Entry</title>
+<title>Final Examination — Student Entry</title>
 <link rel="stylesheet" href="/css/app.css">
 <link rel="stylesheet" href="/css/exam.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%234f46e5'/><text x='50' y='68' font-size='52' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'>E</text></svg>">
@@ -93,6 +93,19 @@
         </form>
       </div>
 
+      <div class="card-pad score-lookup">
+        <details id="scoreLookupPanel">
+          <summary>Check a released score</summary>
+          <p class="tiny muted" style="margin-top:8px">Enter your exam code and student ID. Anyone who knows both can view your released score.</p>
+          <form id="scoreLookup" autocomplete="off" style="margin-top:14px">
+            <div class="field"><label for="lookupCode">Exam access code</label><input id="lookupCode" required maxlength="30" spellcheck="false"></div>
+            <div class="field"><label for="lookupNumber">Student ID</label><input id="lookupNumber" required minlength="2" maxlength="30"></div>
+            <button class="btn btn-soft" type="submit">Check score</button>
+            <p id="lookupResult" class="small" role="status" aria-live="polite" style="margin-top:10px"></p>
+          </form>
+        </details>
+      </div>
+
       <div class="entry-foot">
         <span id="clockLine" class="tiny muted"></span>
       </div>
@@ -102,5 +115,6 @@
 </main>
 
 <script type="module" src="/js/student-entry.js"></script>
+<script type="module" src="/js/render-icons.js"></script>
 </body>
 </html>

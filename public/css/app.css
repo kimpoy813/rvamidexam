@@ -493,3 +493,6 @@ input, select, textarea { max-width: 100%; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Render action icons inherit each control's theme and leave text visible. */
+button .action-icon { width: 1em; height: 1em; flex: 0 0 1em; vertical-align: -0.15em; margin-right: .4em; pointer-events: none; }

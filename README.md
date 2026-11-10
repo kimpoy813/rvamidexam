@@ -12,6 +12,32 @@ real pages, so run `npm install` before `npm test`.
 
 ---
 
+## Render: released score lookup
+
+The student entry page has a **Check a released score** form. A teacher must turn
+on **Release results to students** in Exam setup; it is off by default. Students
+enter the current exam code and their student ID. Anyone who knows both can view
+the score: this is not identity verification. The most recent attempt must be
+submitted and not invalidated; pending manual grading is marked provisional.
+Regenerating the code makes the old code unusable for lookup. Hiding results again
+cannot erase scores already seen or saved. The per-process lookup throttle is
+best-effort and is not a substitute for an edge rate limiter.
+
+## Render: importing a keyed examination
+
+In the teacher dashboard, choose the intended exam, open **Questions**, and use
+**Load question file** to place a JSON, text, or CSV file in the editor. Select
+**Preview pasted questions**, review the questions and keys, and then choose
+**Save question bank**. Saving replaces the selected exam’s bank; use a new exam
+if existing attempts or questions must be preserved. Importing a titled JSON
+file also updates that exam's title. The fresh-store starter bank is still sample
+content and is not automatically installed over an existing database.
+
+Do not commit real answer keys to a public repository. Keep keyed exam files
+private and give them only to trusted teachers. The Render app stores the
+imported keys in its configured database; persistent storage is required to
+retain them across restarts.
+
 ## Quick start
 
 ```bash
@@ -74,8 +100,8 @@ The live monitor then shows everyone who has joined, updating in real time.
   change an answer any time before submitting. No confirmation pop-ups on the way.
   (Section locking is available as a toggle, off by default.)
 - **No score on screen.** Submitting shows a confirmation only; results stay with the
-  teacher. (Also a toggle — turn on *Show results to students* to release an item
-  review immediately.)
+  teacher. Turn on *Release results to students* to release an item
+  review immediately.
 
 ---
 
@@ -549,7 +575,7 @@ results, and teacher actions exist in both, but important differences remain:
   actions in Results and shows recent events in the live roster, but does not
   provide that complete drawer or record all of those metadata fields.
 - Render can show an item-by-item review when results are released; Vercel's
-  private result lookup currently shows a score only. Vercel intentionally keeps
+  result lookup currently shows a score only. Vercel intentionally keeps
   scores hidden until the teacher releases them and uses exam code and student ID for lookup (which does not authenticate the student).
 - Setup in Render has automatic save indicators and additional compatibility
   toggles. Vercel uses explicit saves, always permits refresh in the original tab,
@@ -563,14 +589,14 @@ and review the remaining gaps before replacing a live Render deployment.
 
 ### Original-app PostgreSQL port (development only)
 
-`server/neon/exam-repository.js` and `attempt-repository.js` are standalone,
+`server/neon/exam-repository.js`, `attempt-repository.js`, and `teacher-repository.js` are standalone,
 async storage primitives for the original question types and grading engine.
 They are **not wired to any HTTP routes or deployment** and must not be treated
 as a working replacement for the original app. New attempt snapshots keep the
 question bank and settings used at join time, and transaction locks protect
 bank replacement, concurrent saves, submission, and grading. Session tokens are
 stored hashed. Remaining work includes porting and integrating original student
-and teacher APIs, account management, navigation, integrity monitoring, results,
+and teacher APIs, account-route integration, navigation, integrity monitoring, results,
 imports, and original UI; migrations and real deployment testing are also needed.
 
 The opt-in `tests/neon-exam-repository.test.js` uses `TEST_DATABASE_URL` for an

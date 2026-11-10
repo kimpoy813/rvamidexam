@@ -251,6 +251,8 @@ test('withheld results are not present anywhere in the student response', async 
 
   // The raw JSON must not contain the mark — hiding it in the UI is not enough,
   // because the number would still be readable in the network response.
+  const paperAfter = await (await fetch(`${BASE}/api/s/${token}/paper`)).json();
+  assert.equal(paperAfter.grade, null, 'paper must not expose grades or answer keys');
   const raw = await (await fetch(`${BASE}/api/s/${token}/result`)).text();
   assert.equal(JSON.parse(raw).summary, null, 'the summary must be omitted entirely');
   assert.doesNotMatch(raw, /"percent"/, 'no percentage should be sent');
@@ -375,6 +377,50 @@ test('essay answers stay pending until the teacher grades them', async () => {
   const after = (await call('GET', `/api/teacher/session/${token}`, undefined, teacher)).data;
   assert.equal(after.grade.pending, 0);
   assert.equal(after.grade.items[essay.id].awarded, 12);
+});
+
+test('released scores require the current code and student ID and respect the latest attempt', async () => {
+  const lookup = (code, number) => call('POST', '/api/public/result-lookup', { code, number });
+  assert.equal((await lookup('', 'S-LOOKUP')).status, 400);
+  assert.equal((await lookup(accessCode, '')).status, 400);
+  const joined = await call('POST', '/api/sessions', { access_code:accessCode, student_name:'Lookup Student', student_no:'S-LOOKUP', class_section:'A' });
+  assert.equal(joined.status, 201);
+  const token=joined.data.token;
+  await call('POST', `/api/s/${token}/start`, {});
+  const paper=(await call('GET', `/api/s/${token}/paper`)).data;
+  const essay=paper.sections[3].questions[0];
+  await call('POST', `/api/s/${token}/goto`, {index:essay.index});
+  await call('POST', `/api/s/${token}/answer`, {questionId:essay.id,value:'An essay.'});
+  await call('POST', `/api/s/${token}/submit`, {confirm:true});
+  assert.equal((await lookup(accessCode,'S-LOOKUP')).status, 404);
+  try {
+    assert.equal((await call('POST','/api/teacher/settings',{show_result_to_student:true},teacher)).status,200);
+    const shown=await lookup(` ${accessCode.toLowerCase()} `,' s-lookup ');
+    assert.equal(shown.status,200); assert.equal(shown.data.pending,15); assert.equal(shown.data.max,50);
+    assert.deepEqual(Object.keys(shown.data).sort(),['max','pending','score','title']);
+    assert.equal((await lookup('BAD-CODE','S-LOOKUP')).status,404);
+    assert.equal((await lookup(accessCode,'not-found')).status,404);
+    await call('POST', `/api/teacher/session/${token}/grade`, {questionId:essay.id,points:12},teacher);
+    const graded=await lookup(accessCode,'S-LOOKUP'); assert.equal(graded.data.pending,0); assert.equal(graded.data.score,12);
+    try {
+      setSettings({access_code:'NEW-123'});
+      assert.equal((await lookup(accessCode,'S-LOOKUP')).status,404);
+      assert.equal((await lookup('NEW-123','S-LOOKUP')).status,200);
+    } finally { setSettings({access_code:accessCode}); }
+    const next=await call('POST', '/api/sessions', {access_code:accessCode,student_name:'Lookup Student',student_no:'s-lookup',class_section:'B'});
+    assert.equal(next.status,201);
+    assert.equal((await lookup(accessCode,'S-LOOKUP')).status,404);
+    await call('POST', `/api/teacher/session/${next.data.token}/action`, {action:'invalidate'},teacher);
+    assert.equal((await lookup(accessCode,'S-LOOKUP')).status,404);
+    const invalidated=await call('GET',`/api/s/${next.data.token}/result`);
+    assert.equal(invalidated.data.summary,null);assert.deepEqual(invalidated.data.items,[]);
+    await call('POST', `/api/teacher/session/${next.data.token}/action`, {action:'reopen'},teacher);
+    assert.equal((await lookup(accessCode,'S-LOOKUP')).status,404);
+    await call('POST', `/api/s/${next.data.token}/submit`, {confirm:true});
+    assert.equal((await lookup(accessCode,'S-LOOKUP')).data.score,0);
+    await call('POST','/api/teacher/settings',{show_result_to_student:false},teacher);
+    assert.equal((await lookup(accessCode,'S-LOOKUP')).status,404);
+  } finally { setSettings({show_result_to_student:'0'}); }
 });
 
 test('results summarise the class and export as CSV', async () => {

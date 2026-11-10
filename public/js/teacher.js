@@ -1254,6 +1254,19 @@ $('#bankText').addEventListener('input', () => {
   updateBankStatus();
 });
 
+$('#bankFile').addEventListener('change', async (event) => {
+  const file = event.currentTarget.files?.[0];
+  if (!file) return;
+  if ((state.bankDraftDirty || state.bankTextStale) && !confirm('Replace unsaved question-bank text with this file?')) { event.currentTarget.value = ''; return; }
+  if (file.size > 1024 * 1024) { toast('Question file must be 1 MB or smaller.', 'bad'); event.currentTarget.value = ''; return; }
+  try {
+    $('#bankText').value = await file.text();
+    $('#bankText').dispatchEvent(new Event('input', { bubbles: true }));
+    toast('File loaded. Preview the questions before saving.', 'ok');
+  } catch { toast('Could not read that file.', 'bad'); }
+  event.currentTarget.value = '';
+});
+
 $('#loadCurrent').addEventListener('click', async () => {
   if ((state.bankDraftDirty || state.bankTextStale) &&
       !confirm('Discard the unsaved pasted text and preview edits, then reload the saved question bank?')) return;

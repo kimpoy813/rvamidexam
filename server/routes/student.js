@@ -10,13 +10,24 @@
  */
 import {
   getSession, createSession, updateSession, getSettings, getExamSettings,
-  getExamBlueprint, findExamByCode, listSessions, logEvent, now, eventsFor
+  getExamBlueprint, findExamByCode, listSessions, logEvent, now, eventsFor, db
 } from '../lib/db.js';
 import { buildPaper, gradePaper } from '../lib/exam.js';
 import { HttpError, sendJson, readJsonBody, clientIp } from '../lib/http.js';
 import {
   secondsLeft, finishSession, broadcastRoster, registerViolation, violationLabel, enforceDeadlines
 } from '../lib/live.js';
+
+// Best-effort, per-process throttling; a production edge limiter is still recommended.
+const resultLookups = new Map();
+function limitResultLookup(req) {
+  const key = req.socket?.remoteAddress || 'unknown';
+  const time = Date.now();
+  if (resultLookups.size > 10000) for (const [ip, bucket] of resultLookups) if (bucket.reset <= time) resultLookups.delete(ip);
+  const bucket = resultLookups.get(key);
+  if (!bucket || bucket.reset <= time) resultLookups.set(key, { count: 1, reset: time + 15 * 60 * 1000 });
+  else if (++bucket.count > 300) throw new HttpError(429, 'Too many requests. Please try again later.');
+}
 
 export function registerStudentRoutes(router) {
   /* ------------------------------------------------------------- exam info */
@@ -52,6 +63,30 @@ export function registerStudentRoutes(router) {
         lockAfter: !!sec.lock_after
       }))
     });
+  });
+
+  /* ------------------------------------------------------- released score */
+
+  router.post('/api/public/result-lookup', async (req, res) => {
+    limitResultLookup(req);
+    const body = await readJsonBody(req, 4096);
+    const code = String(body.code || '').trim().toUpperCase();
+    const number = String(body.number || '').trim();
+    if (!code || code.length > 30 || number.length < 2 || number.length > 30)
+      throw new HttpError(400, 'Enter your exam code and student ID.');
+    // A newer in-progress or invalidated attempt must not reveal an older one.
+    const exam = findExamByCode(code);
+    if (!exam || exam.settings.show_result_to_student !== '1')
+      throw new HttpError(404, 'No released score found. Check your details or ask your teacher.');
+    enforceDeadlines();
+    const row = db.prepare(`SELECT token FROM sessions WHERE exam_id = ? AND lower(trim(student_no)) = lower(?)
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(exam.id, number);
+    const session = row && getSession(row.token);
+    if (!session || !session.submitted_at || !['submitted', 'force_submitted'].includes(session.status))
+      throw new HttpError(404, 'No released score found. Check your details or ask your teacher.');
+    const paper = buildPaper(session, undefined, exam.settings);
+    const grade = gradePaper(paper, session.answers, session.manual_scores, exam.id);
+    return sendJson(res, 200, { title: exam.settings.exam_title, score: grade.score, max: grade.max, pending: grade.pending });
   });
 
   /* ---------------------------------------------------------- start / join */
@@ -210,9 +245,8 @@ export function registerStudentRoutes(router) {
       answers: Object.fromEntries(
         Object.entries(session.answers).map(([k, v]) => [k, v.value ?? ''])
       ),
-      grade: session.status === 'active'
-        ? null
-        : gradePaper(paper, session.answers, session.manual_scores, session.exam_id)
+      // Grades and answer keys belong only in the release-controlled result endpoint.
+      grade: null
     });
   });
 
@@ -441,7 +475,7 @@ export function registerStudentRoutes(router) {
     const session = load(req.params.token, { allowSubmitted: true });
     if (session.status === 'active') throw new HttpError(409, 'Exam is still in progress.');
     const s = getExamSettings(session.exam_id);
-    const revealed = s.show_result_to_student === '1';
+    const revealed = s.show_result_to_student === '1' && session.status !== 'invalidated';
     const paper = buildPaper(session, undefined, s);
     const grade = gradePaper(paper, session.answers, session.manual_scores, session.exam_id);
 
