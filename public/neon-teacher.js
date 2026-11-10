@@ -174,7 +174,7 @@ async function results() {
   const tbody = $('#resultRows'); tbody.replaceChildren();
   for (const r of data.results) {
     const tr = document.createElement('tr');
-    for (const text of [r.student_name, r.student_no, r.submitted_at ? (r.pending ? 'Needs grading' : 'Submitted') : 'In progress', r.submitted_at ? `${r.score} / ${r.total}${r.pending ? ` (${r.pending} pending)` : ''}` : '—']) { const td = document.createElement('td'); td.textContent = text; tr.append(td); }
+    for (const text of [r.student_name, r.student_no, r.student_class || '—', r.student_section || '—', r.submitted_at ? (r.pending ? 'Needs grading' : 'Submitted') : 'In progress', r.submitted_at ? `${r.score} / ${r.total}${r.pending ? ` (${r.pending} pending)` : ''}` : '—']) { const td = document.createElement('td'); td.textContent = text; tr.append(td); }
     const answerCell = document.createElement('td'); const details = document.createElement('details'); const summary = document.createElement('summary'); summary.textContent = 'View answers and grade'; details.append(summary); const list = document.createElement('ol');
     for (const q of data.questions) {
       const item = document.createElement('li'), answer = r.answers[q.id];
@@ -187,9 +187,14 @@ async function results() {
       }
       list.append(item);
     }
-    details.append(list); answerCell.append(details); tr.append(answerCell); tbody.append(tr);
+    details.append(list);
+    if (r.integrity_events?.length) {
+      const events=document.createElement('details'), summary=document.createElement('summary'); summary.textContent=`Integrity events (${r.integrity_events.length}${r.integrity_events.length>=500 ? ', limit reached' : ''})`;events.append(summary);
+      const eventList=document.createElement('ul'); for(const event of r.integrity_events) { const li=document.createElement('li'); li.textContent=`${event.type.replaceAll('_',' ')} — ${new Date(event.at).toLocaleString()}`;eventList.append(li); } events.append(eventList);answerCell.append(events);
+    }
+    answerCell.append(details); tr.append(answerCell); tbody.append(tr);
   }
-  if (!data.results.length) { const tr = document.createElement('tr'); const td = document.createElement('td'); td.colSpan = 5; td.textContent = 'No students have joined yet.'; tr.append(td); tbody.append(tr); }
+  if (!data.results.length) { const tr = document.createElement('tr'); const td = document.createElement('td'); td.colSpan = 7; td.textContent = 'No students have joined yet.'; tr.append(td); tbody.append(tr); }
 }
 async function progress() {
   const examId = selected, generation = ++progressGeneration;
@@ -201,7 +206,7 @@ async function progress() {
     if (!data.attempts.length) rows.textContent = 'No students have joined yet.';
     for (const attempt of data.attempts) {
       const row = document.createElement('div'); row.className = 'exam-row';
-      const name = document.createElement('strong'); name.textContent = `${attempt.student_name} (${attempt.student_no})`;
+      const name = document.createElement('strong'); name.textContent = `${attempt.student_name} (${attempt.student_no})${attempt.student_class || attempt.student_section ? ` · ${[attempt.student_class,attempt.student_section].filter(Boolean).join(' / ')}` : ''}`;
       const status = document.createElement('span'); status.className = 'muted tiny';
       const state = attempt.submitted_at ? 'Submitted' : new Date(attempt.deadline).getTime() <= Date.now() ? 'Time expired' : 'Not submitted';
       status.textContent = `${attempt.answered} / ${data.total} saved · ${state}`; row.append(name, status); rows.append(row);

@@ -13,7 +13,7 @@ test('serverless exam workflow survives concurrent saves and isolates teachers',
   const connection = new URL(url); connection.searchParams.set('options', `-csearch_path=${schema}`); process.env.DATABASE_URL = connection.toString();
   const { default: handler, closeTestPool } = await import('../api/handler.js');
   const server = http.createServer(handler); server.listen(0, '127.0.0.1'); await once(server,'listening'); const base = `http://127.0.0.1:${server.address().port}/api/simple/`;
-  const call = async (path, body, token, studentToken) => { const r = await fetch(base+path, { method:body === undefined ? 'GET' : 'POST', headers:{ ...(body === undefined ? {} : { 'Content-Type':'application/json' }), ...(token ? { 'X-Teacher-Token':token } : {}), ...(studentToken ? { 'X-Exam-Token':studentToken } : {}) }, ...(body === undefined ? {} : { body:JSON.stringify(body) }) }); return { status:r.status, data:await r.json() }; };
+  const call = async (path, body, token, studentToken) => { const r = await fetch(base+path, { method:body === undefined ? 'GET' : 'POST', headers:{ ...(body === undefined ? {} : { 'Content-Type':'application/json' }), ...(token ? { 'X-Teacher-Token':token } : {}), ...(studentToken ? { 'X-Exam-Token':studentToken } : {}) }, ...(body === undefined ? {} : { body:JSON.stringify(path === 'join' ? {studentClass:'Grade 10',studentSection:'A',...body} : body) }) }); return { status:r.status, data:await r.json() }; };
   try {
     const rewritten = await fetch(`http://127.0.0.1:${server.address().port}/api/handler?path=simple%2Fme`);
     assert.equal(rewritten.status, 401, 'Vercel-style rewritten path reaches the API');
@@ -55,28 +55,34 @@ test('serverless exam workflow survives concurrent saves and isolates teachers',
     assert.equal(raceJoin.status,201); assert.ok([200,409].includes(raceEdit.status));
     const raceAttempt = await call('attempt',undefined,undefined,raceJoin.data.token);
     assert.equal(raceAttempt.data.questions[0].prompt,raceEdit.status===200 ? 'Updated' : 'Original');
+    assert.equal((await call('join',{code:exam.code,name:'Invalid Student',number:'BAD',studentClass:'  '})).status,400);
+    assert.equal((await call('join',{code:exam.code,name:'Invalid Student',number:'BAD',studentSection:''})).status,400);
     const joined = await Promise.all(Array.from({length:50},(_,i)=>call('join',{ code:exam.code,name:`Student ${i}`,number:`N-${i}` })));
     assert.ok(joined.every(x=>x.status===201), JSON.stringify(joined.find(x=>x.status!==201)));
     const lockedBank = await call(`exams/${exam.id}/bank`,undefined,teacher);
     assert.equal(lockedBank.data.locked,true);
     assert.equal((await call(`exams/${exam.id}/bank`,{...update,revision:lockedBank.data.revision},teacher)).status,409);
+    const duplicate=await call('join',{code:exam.code,name:'Student 0',number:'n-0'}); assert.equal(duplicate.status,409);
+    const violation=await call('attempt/integrity',{type:'paste'},undefined,joined[0].data.token);assert.equal(violation.status,200);
+    assert.equal((await call('attempt/integrity',{type:'invalid'},undefined,joined[0].data.token)).status,400);
     const attempts = await Promise.all(joined.map(x=>call('attempt',undefined,undefined,x.data.token)));
     assert.ok(attempts.every(x=>x.status===200));
     assert.ok(attempts.every(x=>!JSON.stringify(x.data.questions).includes('"answer"')));
     const saves = await Promise.all(joined.flatMap((entry,i)=>attempts[i].data.questions.map((q,n)=>call('attempt/answer',{questionId:q.id,answer:n===0 ? 1:0},undefined,entry.data.token))));
     assert.ok(saves.every(x=>x.status===200), JSON.stringify(saves.find(x=>x.status!==200)));
     const progress = await call(`exams/${exam.id}/progress`, undefined, teacher);
-    assert.equal(progress.status, 200); assert.equal(progress.data.total, 2); assert.equal(progress.data.attempts.length, 50);
+    assert.equal(progress.status, 200); assert.equal(progress.data.total, 2); assert.equal(progress.data.attempts.length, 50); assert.equal(progress.data.attempts[0].student_class,'Grade 10'); assert.equal(progress.data.attempts[0].student_section,'A');
     assert.ok(progress.data.attempts.every(x => x.answered === 2 && !x.submitted_at));
     assert.ok(!JSON.stringify(progress.data).includes('answers'));
     const submitted = await Promise.all(joined.map(x=>call('attempt/submit',{},undefined,x.data.token)));
-    assert.ok(submitted.every(x=>x.status===200 && x.data.score===2),JSON.stringify(submitted.find(x=>x.status!==200 || x.data.score!==2)));
+    assert.ok(submitted.every(x=>x.status===200 && !('score' in x.data) && !('total' in x.data)),JSON.stringify(submitted.find(x=>x.status!==200)));
     await closeTestPool(); // Simulate a serverless instance restart.
     const resumed = await call('attempt', undefined, undefined, joined[0].data.token);
-    assert.equal(resumed.data.submitted, true); assert.equal(resumed.data.score, 2);
+    assert.equal(resumed.data.submitted, true); assert.equal('score' in resumed.data, false);
     const results = await call(`exams/${exam.id}/results`,undefined,teacher);
-    assert.equal(results.status,200,JSON.stringify(results.data)); assert.equal(results.data.results.length,50); assert.ok(results.data.results.every(x=>x.score===2));
+    assert.equal(results.status,200,JSON.stringify(results.data)); assert.equal(results.data.results.length,50); assert.equal(results.data.results[0].student_class,'Grade 10'); assert.equal(results.data.results[0].student_section,'A'); assert.ok(results.data.results.every(x=>x.score===2)); const flagged=results.data.results.find(x=>x.student_no==='N-0'); assert.deepEqual(flagged.integrity_events.map(e=>e.type),['duplicate_join','paste']);
     assert.equal(Object.keys(results.data.results[0].answers).length, 2);
+    const race=await Promise.all([1,2].map(()=>call('join',{code:exam.code,name:'Concurrent',number:'RACE'}))); assert.deepEqual(race.map(r=>r.status).sort(),[201,409]);
     const late = await call('join',{code:exam.code,name:'Late Student',number:'LATE'});
     assert.equal(late.status,201);
     const lateAttempt = await call('attempt',undefined,undefined,late.data.token);

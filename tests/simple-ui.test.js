@@ -46,17 +46,21 @@ test('simplified teacher and student interfaces complete an exam', { skip: !url,
     fill(t.querySelector('.prompt'),'Edited before join'); t.querySelector('.prompt').dispatchEvent(new teacherDom.window.Event('input',{bubbles:true}));assert.equal(card.querySelector('.bp-prompt').textContent,'Edited before join'); t.querySelector('#create').dispatchEvent(new teacherDom.window.Event('submit',{bubbles:true,cancelable:true}));
     await wait(()=>/Question bank saved/.test(t.querySelector('#message').textContent));
 
-    studentDom = new JSDOM(fs.readFileSync(new URL('../public/neon.html', import.meta.url),'utf8'), { url:base+'/' }); use(studentDom); await import('../public/neon-student.js?simple-ui-test'); const s = studentDom.window.document;
-    fill(s.querySelector('#code'),code); fill(s.querySelector('#name'),'Test Student'); fill(s.querySelector('#number'),'001'); s.querySelector('#joinForm').dispatchEvent(new studentDom.window.Event('submit',{bubbles:true,cancelable:true}));
+    studentDom = new JSDOM(fs.readFileSync(new URL('../public/neon.html', import.meta.url),'utf8'), { url:base+'/' }); let channel; studentDom.window.BroadcastChannel=class { constructor(){channel=this;} postMessage(){} close(){this.closed=true;} }; use(studentDom); await import('../public/neon-student.js?simple-ui-test'); const s = studentDom.window.document;
+    fill(s.querySelector('#code'),code); fill(s.querySelector('#name'),'Test Student'); fill(s.querySelector('#number'),'001'); fill(s.querySelector('#studentClass'),'Grade 10'); fill(s.querySelector('#studentSection'),'A'); s.querySelector('#joinForm').dispatchEvent(new studentDom.window.Event('submit',{bubbles:true,cancelable:true}));
     await wait(()=>s.querySelectorAll('.choice input').length===4); const radio=s.querySelector('.choice input'); radio.checked=true; radio.dispatchEvent(new studentDom.window.Event('change',{bubbles:true})); await wait(()=>/Answer saved/.test(s.querySelector('#save').textContent));
+    channel.onmessage({data:'present'}); assert.match(s.querySelector('#message').textContent,/another tab/);
+    for(const type of ['copy','cut','paste']) {const event=new studentDom.window.Event(type,{bubbles:true,cancelable:true});s.querySelector('#questions').dispatchEvent(event);assert.equal(event.defaultPrevented,true);}
+    await new Promise(resolve=>setTimeout(resolve,200));
     assert.equal(s.querySelector('#progress').textContent, '1 / 2'); s.querySelector('#next').click(); assert.equal(s.querySelector('#qChip').textContent, 'Question 2');
     const secondRadio = s.querySelector('.choice input'); secondRadio.checked=true; secondRadio.dispatchEvent(new studentDom.window.Event('change',{bubbles:true})); await wait(()=>/Answer saved/.test(s.querySelector('#save').textContent));
     s.querySelector('#prev').click(); assert.equal(s.querySelector('.choice input').checked, true); s.querySelector('#next').click(); s.querySelector('#submit').click();
-    await wait(()=>!s.querySelector('#result').classList.contains('hidden')); assert.match(s.querySelector('#score').textContent,/2 \/ 2/);
+    await wait(()=>!s.querySelector('#result').classList.contains('hidden')); assert.match(s.querySelector('#score').textContent,/teacher will release/); assert.equal(channel.closed,true);
     use(teacherDom); t.querySelector('[data-view=questions]').click(); t.querySelector('#loadBank').click();
     await wait(()=>/Question bank locked/.test(t.querySelector('#draftStatus').textContent)); assert.equal(t.querySelector('#saveBank').disabled,true);
     t.querySelector('[data-view=results]').click(); await wait(()=>/Test Student/.test(t.querySelector('#resultRows').textContent));
-    assert.match(t.querySelector('#resultRows').textContent,/2 \/ 2/); assert.equal(t.querySelector('#joinedKpi').textContent, '1');
+    assert.match(t.querySelector('#resultRows').textContent,/Integrity events \(4\)/); for(const type of ['copy','cut','paste','second tab']) assert.match(t.querySelector('#resultRows').textContent,new RegExp(type));
+    assert.match(t.querySelector('#resultRows').textContent,/Grade 10/); assert.match(t.querySelector('#resultRows').textContent,/2 \/ 2/); assert.equal(t.querySelector('#joinedKpi').textContent, '1');
   } finally {
     teacherDom?.window.close(); studentDom?.window.close(); for (const [key,value] of Object.entries(original)) { if (value === undefined) delete globalThis[key]; else globalThis[key]=value; }
     server.closeAllConnections(); await new Promise(r=>server.close(r)); await closeTestPool(); delete process.env.DATABASE_URL;

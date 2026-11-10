@@ -448,9 +448,17 @@ Existing multiple-choice exams and results use the same `simple_*` tables.
 
 This is **not full parity** with the original app: live presence/proctoring,
 SQLite data migration and some other settings are not implemented. Each part must contain a question. The
-progress snapshot does not show whether students are online. Students cannot
-return on another device and cannot view a later grade after leaving the result
-page; the teacher retains the graded result.
+progress snapshot does not show whether students are online. Student scores are
+not returned by the student API; teachers can share results outside the app (an
+in-app release feature is not implemented). Students cannot resume on another
+device or after closing the original tab. An active duplicate join using the same
+exam and student number is rejected and logged; students must contact their
+teacher if they lose the original tab. Copy/cut/paste are blocked in the exam
+page and logged, and same-attempt tabs are detected where BroadcastChannel is
+available. Teachers can review logged events in Results. Browser restrictions
+and duplicate detection are best effort: different student numbers, browser
+profiles, devices, offline failures, or modified clients can bypass them. Events
+are capped at 500 per attempt and may be lost if the network is unavailable.
 
 1. Connect this repository to Vercel and connect a Neon PostgreSQL database.
    Set a **pooled** Neon connection string as the sensitive `DATABASE_URL`
@@ -460,7 +468,8 @@ page; the teacher retains the graded result.
    tables on upgrade.
 2. Deploy this branch after review. Open `/teacher` to create a teacher
    account. Create an exam and share its code with students;
-   students open `/`. Closing an exam prevents new joins but does not end
+   students open `/` and enter their class and section. Existing attempts made
+   before these fields were added display a dash. Closing an exam prevents new joins but does not end
    existing attempts.
    The Questions tab can load and edit the selected exam before any student
    has joined. Once an attempt exists, its bank is locked to protect saved
