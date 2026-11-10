@@ -646,11 +646,18 @@ export function parseExamCsv(text) {
     if (!prompt.trim()) continue;
 
     if (!bySection.has(sectionName)) bySection.set(sectionName, []);
+    const questionKind = (kind || (choices.length ? 'mcq' : 'short')).trim().toLowerCase();
+    // CSV's single answer column represents lists with |, just like the text
+    // format. Keep manual essays unkeyed and true/false choices consistent.
+    const answerValue = !answer || questionKind === 'essay' ? null
+      : questionKind === 'multiselect' || (questionKind === 'short' && answer.includes('|'))
+        ? answer.split('|').map(x => x.trim()).filter(Boolean)
+        : answer;
     bySection.get(sectionName).push({
-      kind: kind || (choices.length ? 'mcq' : 'short'),
+      kind: questionKind,
       prompt: prompt.trim(),
-      choices,
-      answer: answer || null,
+      choices: questionKind === 'truefalse' && !choices.length ? ['True', 'False'] : choices,
+      answer: answerValue,
       points,
       shuffle: true
     });

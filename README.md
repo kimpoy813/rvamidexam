@@ -438,28 +438,33 @@ remain necessary to retain accounts and data.
 
 ## Vercel + Neon: simplified exam app
 
-The Vercel deployment has a separate, smaller version of the app. It supports
-teacher self-registration, multiple-choice exams, individual answer autosaves,
-teacher results, and a periodically refreshed snapshot of saved student progress.
-The snapshot does not indicate whether students are online. It does **not**
-include the original app's live proctoring,
-essay grading, or data migration from SQLite. The question editor supports a
-limited text/JSON/CSV import for one-point single-answer multiple choice and
-true/false questions; other question types and point values are rejected, and
-sections and instructions are not retained. Students see
-their score after submitting. Existing SQLite accounts and exams will not
-appear in this version; it uses separate `simple_*` PostgreSQL tables.
+The Vercel deployment has a separate version of the app. It supports teacher
+self-registration, section titles and instructions, multiple-choice, multiple
+answer, true/false, short-answer and essay questions, autosaves, manual grading,
+and text/JSON/CSV question import. Scores with ungraded answers are provisional.
+Existing multiple-choice exams and results use the same `simple_*` tables.
+
+This is **not full parity** with the original app: per-section timers, section
+locking, shuffling, live presence/proctoring, SQLite data migration and some
+other settings are not implemented. Each part must contain a question. The
+progress snapshot does not show whether students are online. Students cannot
+return on another device and cannot view a later grade after leaving the result
+page; the teacher retains the graded result.
 
 1. Connect this repository to Vercel and connect a Neon PostgreSQL database.
    Set a **pooled** Neon connection string as the sensitive `DATABASE_URL`
    environment variable for the intended deployment environments. Never put
-   it in source control. The database role needs permission to create tables
-   and indexes on first use.
+   it in source control. Back up the database before upgrading. The database role needs permission to
+   create tables and indexes and alter the `simple_attempts` table on upgrade.
 2. Deploy this branch after review. Open `/teacher` to create a teacher
-   account. Create a multiple-choice exam and share its code with students;
+   account. Create an exam and share its code with students;
    students open `/`. Closing an exam prevents new joins but does not end
    existing attempts.
-3. Answers save as each choice is selected. Students must keep the same tab
+   The Questions tab can load and edit the selected exam before any student
+   has joined. Once an attempt exists, its bank is locked to protect saved
+   answers and results; create a new exam instead. The editor warns about
+   concurrent edits rather than silently overwriting them.
+3. Answers save as students make selections or type. Students must keep the same tab
    to resume after a reload; this first version cannot resume on a different
    browser or device. Expired attempts are scored on the next student request
    or when the teacher opens results, rather than by a background timer.
@@ -472,7 +477,7 @@ The PostgreSQL integration test is opt-in and requires a **disposable** test
 database with permission to create and drop schemas:
 
 ```sh
-TEST_DATABASE_URL='postgresql://...' node --test tests/simple-neon.test.js
+TEST_DATABASE_URL='postgresql://...' node --test tests/simple-neon.test.js tests/simple-ui.test.js tests/simple-types.test.js tests/simple-types-ui.test.js tests/simple-migration.test.js
 ```
 
 Do not run this test against a production database. Without `TEST_DATABASE_URL`

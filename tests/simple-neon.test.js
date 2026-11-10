@@ -28,8 +28,8 @@ test('serverless exam workflow survives concurrent saves and isolates teachers',
     const preview = await call('import-preview', { text }, teacher);
     assert.equal(preview.status, 200, JSON.stringify(preview.data));
     assert.equal(preview.data.questions[0].answer, 1); assert.equal(preview.data.questions[0].choices.length, 3);
-    const badImport = await call('import-preview', { text: '1. Explain your answer (essay)' }, teacher);
-    assert.equal(badImport.status, 400);
+    const badImport = await call('import-preview', { text: '1. Explain your answer //' }, teacher);
+    assert.equal(badImport.status, 200); assert.equal(badImport.data.sections[0].questions[0].kind,'essay');
     assert.equal((await call('import-preview', { text:'No questions here' }, teacher)).status, 400);
     const created = await call('exams', { title:'Math', duration:10, questions:[{ prompt:'One plus one?', choices:['1','2','3'], answer:1 },{ prompt:'Two plus two?', choices:['4','5'], answer:0 }] }, teacher);
     assert.equal(created.status,201,JSON.stringify(created.data)); const exam = created.data;
@@ -38,8 +38,27 @@ test('serverless exam workflow survives concurrent saves and isolates teachers',
     assert.equal((await call(`exams/${exam.id}/progress`)).status,401);
     assert.equal((await call(`exams/${exam.id}/open`, {open:false}, other)).status,404);
     assert.equal((await call('exams',undefined,other)).data.exams.length,0);
+    assert.equal((await call(`exams/${exam.id}/bank`, undefined, other)).status,404);
+    assert.equal((await call(`exams/${exam.id}/bank`)).status,401);
+    const loaded = await call(`exams/${exam.id}/bank`,undefined,teacher); assert.equal(loaded.data.locked,false);
+    const update = {title:'Math updated',duration:10,questions:loaded.data.questions,revision:loaded.data.revision};
+    assert.equal((await call(`exams/${exam.id}/bank`,update,other)).status,404);
+    assert.equal((await call(`exams/${exam.id}/bank`,update,teacher)).status,200);
+    assert.equal((await call(`exams/${exam.id}/bank`,update,teacher)).status,409, 'stale draft must not overwrite another edit');
+    const racedExam = (await call('exams',{title:'Race',duration:10,questions:[{prompt:'Original',choices:['A','B'],answer:0}]},teacher)).data;
+    const raceBank = (await call(`exams/${racedExam.id}/bank`,undefined,teacher)).data;
+    const [raceEdit,raceJoin] = await Promise.all([
+      call(`exams/${racedExam.id}/bank`,{title:'Race',duration:10,questions:[{prompt:'Updated',choices:['A','B'],answer:1}],revision:raceBank.revision},teacher),
+      call('join',{code:racedExam.code,name:'Race Student',number:'R-1'})
+    ]);
+    assert.equal(raceJoin.status,201); assert.ok([200,409].includes(raceEdit.status));
+    const raceAttempt = await call('attempt',undefined,undefined,raceJoin.data.token);
+    assert.equal(raceAttempt.data.questions[0].prompt,raceEdit.status===200 ? 'Updated' : 'Original');
     const joined = await Promise.all(Array.from({length:50},(_,i)=>call('join',{ code:exam.code,name:`Student ${i}`,number:`N-${i}` })));
     assert.ok(joined.every(x=>x.status===201), JSON.stringify(joined.find(x=>x.status!==201)));
+    const lockedBank = await call(`exams/${exam.id}/bank`,undefined,teacher);
+    assert.equal(lockedBank.data.locked,true);
+    assert.equal((await call(`exams/${exam.id}/bank`,{...update,revision:lockedBank.data.revision},teacher)).status,409);
     const attempts = await Promise.all(joined.map(x=>call('attempt',undefined,undefined,x.data.token)));
     assert.ok(attempts.every(x=>x.status===200));
     assert.ok(attempts.every(x=>!JSON.stringify(x.data.questions).includes('"answer"')));

@@ -1,7 +1,8 @@
 import pg from 'pg';
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
-import { parseAny } from '../server/lib/importer.js';
+import { normalizeBlueprint, previewOriginalImport } from '../server/neon/blueprint.js';
+import { gradeOne } from '../server/lib/exam-engine.js';
 
 const scrypt = promisify(crypto.scrypt);
 let pool;
@@ -28,9 +29,16 @@ async function initialize() {
         CREATE TABLE IF NOT EXISTS simple_teacher_tokens (token_hash TEXT PRIMARY KEY, teacher_id TEXT NOT NULL REFERENCES simple_teachers(id) ON DELETE CASCADE, expires_at TIMESTAMPTZ NOT NULL);
         CREATE TABLE IF NOT EXISTS simple_exams (id TEXT PRIMARY KEY, teacher_id TEXT NOT NULL REFERENCES simple_teachers(id), title TEXT NOT NULL, code TEXT UNIQUE NOT NULL, duration INTEGER NOT NULL, questions JSONB NOT NULL, open BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
         CREATE TABLE IF NOT EXISTS simple_attempts (token_hash TEXT PRIMARY KEY, exam_id TEXT NOT NULL REFERENCES simple_exams(id), student_name TEXT NOT NULL, student_no TEXT NOT NULL, answers JSONB NOT NULL DEFAULT '{}'::jsonb, started_at TIMESTAMPTZ NOT NULL DEFAULT now(), deadline TIMESTAMPTZ NOT NULL, submitted_at TIMESTAMPTZ, score INTEGER, total INTEGER);
+        ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS pending DOUBLE PRECISION NOT NULL DEFAULT 0;
+        ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS manual_scores JSONB NOT NULL DEFAULT '{}'::jsonb;
         CREATE INDEX IF NOT EXISTS simple_attempts_exam ON simple_attempts(exam_id);
         CREATE TABLE IF NOT EXISTS simple_auth_limits (key TEXT PRIMARY KEY, window_start TIMESTAMPTZ NOT NULL, attempts INTEGER NOT NULL);
       `);
+      // Upgrade existing integer score columns once; preserve all existing data.
+      for (const col of ['score','total']) {
+        const type = await client.query("SELECT data_type FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='simple_attempts' AND column_name=$1", [col]);
+        if (type.rows[0]?.data_type !== 'double precision') await client.query(`ALTER TABLE simple_attempts ALTER COLUMN ${col} TYPE DOUBLE PRECISION`);
+      }
       await client.query('COMMIT');
     } catch (err) {
       try { await client.query('ROLLBACK'); } catch {}
@@ -66,15 +74,26 @@ async function limit(req, action) {
     attempts = CASE WHEN simple_auth_limits.window_start < now() - interval '15 minutes' THEN 1 ELSE simple_auth_limits.attempts + 1 END RETURNING attempts`, [key]);
   if (rows[0].attempts > 30) throw fail(429, 'Too many attempts. Try again later.');
 }
-function parseQuestions(input) {
+function parseQuestions(input, sections) {
+  if (sections !== undefined) {
+    const normalized = normalizeBlueprint(sections);
+    if (!normalized.length || normalized.some(s => !s.questions.length)) throw fail(400, 'Each part needs at least one question.');
+    const qs = normalized.flatMap((s, index) => s.questions.map(q => ({ ...q, id:id(), section:{ index, title:s.title, instructions:s.instructions, lock_after:false, minutes:s.minutes } })));
+    if (qs.length > 100) throw fail(400, 'Provide at most 100 questions.');
+    // Section locking and per-section timing require the original navigation
+    // protocol; do not silently promise them in the serverless edition.
+    if (normalized.some(s => s.minutes > 0)) throw fail(400, 'Per-part timers are not supported; use the exam time limit.');
+    return qs;
+  }
+  // Legacy MCQ payload and stored exams remain compatible.
   if (!Array.isArray(input) || !input.length || input.length > 100) throw fail(400, 'Provide 1 to 100 questions.');
-  return input.map((q) => {
+  return input.map(q => {
     const prompt = String(q.prompt || '').trim();
     if (!prompt || prompt.length > 2000 || !Array.isArray(q.choices) || q.choices.length < 2 || q.choices.length > 6) throw fail(400, 'Every question needs a prompt and 2–6 choices.');
     const choices = q.choices.map(c => String(c).trim());
     if (choices.some(c => !c || c.length > 500)) throw fail(400, 'Choices must be non-empty and at most 500 characters.');
     if (!Number.isInteger(q.answer) || q.answer < 0 || q.answer >= choices.length) throw fail(400, 'Choose a correct answer for every question.');
-    return { id: id(), prompt, choices, answer: q.answer };
+    return { id:id(), prompt, choices, answer:q.answer };
   });
 }
 async function tx(fn) {
@@ -83,8 +102,19 @@ async function tx(fn) {
   catch (err) { try { await c.query('ROLLBACK'); } catch {} throw err; }
   finally { c.release(); }
 }
-const publicQuestions = (qs) => qs.map(({ id, prompt, choices }) => ({ id, prompt, choices }));
-const score = (qs, answers) => qs.reduce((sum, q) => sum + (answers[q.id] === q.answer ? 1 : 0), 0);
+const bankRevision = exam => hash(JSON.stringify({ title:exam.title, duration:exam.duration, questions:exam.questions }));
+const publicQuestions = qs => qs.map(q => ({ id:q.id, prompt:q.prompt, choices:q.choices, kind:q.kind || 'mcq', points:q.points ?? 1, section:q.section || null }));
+function mark(q, value, manual) {
+  const points = q.points ?? 1;
+  if (manual && typeof manual.points === 'number') return { points:manual.points, pending:false };
+  if (!q.kind) return { points:value === q.answer ? 1 : 0, pending:false };
+  return gradeOne({ ...q, hasAnswer:q.answer != null }, value);
+}
+function calculate(qs, answers, manual = {}) {
+  let score = 0, total = 0, pending = 0;
+  for (const q of qs) { const pts = q.points ?? 1, result = mark(q, answers[q.id], manual[q.id]); score += result.points; total += pts; if (result.pending) pending += pts; }
+  return { score:Math.round(score * 1000)/1000, total:Math.round(total * 1000)/1000, pending:Math.round(pending * 1000)/1000 };
+}
 async function lockAttempt(client, token) {
   if (!/^[\w-]{24,64}$/.test(token)) throw fail(404, 'Attempt not found.');
   const r = await client.query('SELECT a.*, e.questions, e.title FROM simple_attempts a JOIN simple_exams e ON e.id = a.exam_id WHERE a.token_hash=$1 FOR UPDATE OF a', [hash(token)]);
@@ -93,7 +123,8 @@ async function lockAttempt(client, token) {
 }
 async function finalize(client, a) {
   if (a.submitted_at) return a;
-  const result = await client.query('UPDATE simple_attempts SET submitted_at=now(), score=$2, total=$3 WHERE token_hash=$1 RETURNING *', [a.token_hash, score(a.questions, a.answers), a.questions.length]);
+  const grade = calculate(a.questions, a.answers, a.manual_scores);
+  const result = await client.query('UPDATE simple_attempts SET submitted_at=now(), score=$2, total=$3, pending=$4 WHERE token_hash=$1 RETURNING *', [a.token_hash, grade.score, grade.total, grade.pending]);
   return { ...a, ...result.rows[0] };
 }
 
@@ -130,29 +161,45 @@ export default async function handler(req, res) {
       await teacher(req);
       const b = await bodyOf(req);
       if (typeof b.text !== 'string' || !b.text.trim() || b.text.length > 200000) throw fail(400, 'Provide up to 200,000 characters of exam text.');
-      let parsed;
-      try { parsed = parseAny(b.text); } catch (e) { throw fail(400, `Could not parse import: ${e.message}`); }
-      const raw = parsed.sections.flatMap(section => section.questions);
-      const unsupported = [];
-      const converted = raw.map((q, i) => {
-        const choices = Array.isArray(q.choices) ? q.choices.map(c => String(c).trim()) : [];
-        const matching = choices.reduce((a, c, j) => c === String(q.answer ?? '').trim() ? [...a, j] : a, []);
-        if (!['mcq', 'truefalse'].includes(q.kind) || Number(q.points) !== 1 || matching.length !== 1) unsupported.push(i + 1);
-        return { prompt: q.prompt, choices, answer: matching[0] };
-      });
-      if (unsupported.length) throw fail(400, `Cannot import questions ${unsupported.join(', ')}: only single-answer multiple choice and true/false with one point and an unambiguous answer key are supported. No questions were imported.`);
-      // Apply the same limits as exam creation before displaying a preview.
-      const questions = parseQuestions(converted).map(({ id, ...q }) => q);
-      return send(res, 200, { title: parsed.title, questions, warnings: [...(parsed.warnings || []), 'Sections and section instructions are not retained in this version.'] });
+      const preview = previewOriginalImport(b.text);
+      // Legacy clients may still consume the flat form for plain MCQs.
+      const flat = preview.sections.flatMap(section => section.questions);
+      const questions = flat.every(q => ['mcq','truefalse'].includes(q.kind) && q.points === 1 && q.answer !== null)
+        ? flat.map(q => ({prompt:q.prompt,choices:q.choices,answer:q.choices.findIndex(c => c === q.answer)})) : [];
+      return send(res,200,{ ...preview, questions });
     }
     if (path === 'simple/exams' && method === 'GET') { const t = await teacher(req); const r = await query('SELECT id,title,code,duration,open,created_at FROM simple_exams WHERE teacher_id=$1 ORDER BY created_at DESC', [t.id]); return send(res, 200, { exams: r.rows }); }
     if (path === 'simple/exams' && method === 'POST') {
       const t = await teacher(req); const b = await bodyOf(req); const title = String(b.title || '').trim(); const duration = Number(b.duration);
       if (!title || title.length > 150 || !Number.isInteger(duration) || duration < 1 || duration > 600) throw fail(400, 'Provide a title and duration between 1 and 600 minutes.');
-      const qs = parseQuestions(b.questions); let code; let exam;
+      const qs = parseQuestions(b.questions, b.sections); let code; let exam;
       for (let n = 0; n < 5; n++) { code = crypto.randomBytes(6).toString('hex').toUpperCase(); try { exam = await query('INSERT INTO simple_exams(id,teacher_id,title,code,duration,questions) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,title,code,duration,open', [id(),t.id,title,code,duration,JSON.stringify(qs)]); break; } catch(e) { if (e.code !== '23505') throw e; } }
       if (!exam) throw fail(503, 'Could not create an access code. Try again.');
       return send(res, 201, exam.rows[0]);
+    }
+    const bankMatch = path.match(/^simple\/exams\/([\w-]+)\/bank$/);
+    if (bankMatch && (method === 'GET' || method === 'POST')) {
+      const t = await teacher(req), examId = bankMatch[1];
+      if (method === 'GET') {
+        const r = await query('SELECT id,title,duration,questions FROM simple_exams WHERE id=$1 AND teacher_id=$2', [examId,t.id]);
+        if (!r.rows[0]) throw fail(404, 'Exam not found.');
+        const exam = r.rows[0];
+        const count = await query('SELECT EXISTS(SELECT 1 FROM simple_attempts WHERE exam_id=$1) AS locked', [examId]);
+        return send(res,200,{...exam, locked:count.rows[0].locked, revision:bankRevision(exam)});
+      }
+      const b = await bodyOf(req), title = String(b.title || '').trim(), duration = Number(b.duration);
+      if (!title || title.length > 150 || !Number.isInteger(duration) || duration < 1 || duration > 600 || !/^[a-f0-9]{64}$/.test(String(b.revision || ''))) throw fail(400, 'Provide a valid title, duration and bank revision.');
+      const questions = parseQuestions(b.questions, b.sections);
+      const exam = await tx(async c => {
+        const r = await c.query('SELECT id,title,duration,questions FROM simple_exams WHERE id=$1 AND teacher_id=$2 FOR UPDATE', [examId,t.id]);
+        if (!r.rows[0]) throw fail(404, 'Exam not found.');
+        if (bankRevision(r.rows[0]) !== b.revision) throw fail(409, 'This exam changed since it was loaded. Reload the saved bank before editing.');
+        const attempts = await c.query('SELECT 1 FROM simple_attempts WHERE exam_id=$1 LIMIT 1', [examId]);
+        if (attempts.rowCount) throw fail(409, 'This exam already has student attempts. Its question bank cannot be changed; create a new exam instead.');
+        const updated = await c.query('UPDATE simple_exams SET title=$2,duration=$3,questions=$4 WHERE id=$1 RETURNING id,title,duration,questions', [examId,title,duration,JSON.stringify(questions)]);
+        return updated.rows[0];
+      });
+      return send(res,200,{...exam, revision:bankRevision(exam)});
     }
     const toggleMatch = path.match(/^simple\/exams\/([\w-]+)\/open$/);
     if (toggleMatch && method === 'POST') {
@@ -169,22 +216,46 @@ export default async function handler(req, res) {
       const exam = await query('SELECT id, jsonb_array_length(questions) AS total FROM simple_exams WHERE id=$1 AND teacher_id=$2', [progressMatch[1], t.id]);
       if (!exam.rows[0]) throw fail(404, 'Exam not found.');
       const r = await query(`SELECT student_name, student_no, submitted_at, deadline,
-        (SELECT count(*)::int FROM jsonb_object_keys(answers)) AS answered
+        (SELECT count(*)::int FROM jsonb_each(answers) item WHERE item.value <> '""'::jsonb AND item.value <> '[]'::jsonb AND item.value <> 'null'::jsonb) AS answered
         FROM simple_attempts WHERE exam_id=$1 ORDER BY started_at DESC`, [progressMatch[1]]);
       return send(res, 200, { total: exam.rows[0].total, attempts: r.rows });
     }
     const resultMatch = path.match(/^simple\/exams\/([\w-]+)\/results$/);
     if (resultMatch && method === 'GET') {
       const t = await teacher(req); const exam = await query('SELECT * FROM simple_exams WHERE id=$1 AND teacher_id=$2', [resultMatch[1],t.id]); if (!exam.rows[0]) throw fail(404, 'Exam not found.');
-      await query('UPDATE simple_attempts SET submitted_at=now(), score=(SELECT count(*) FROM jsonb_array_elements($2::jsonb) q WHERE answers->>(q->>\'id\') = q->>\'answer\'), total=jsonb_array_length($2::jsonb) WHERE exam_id=$1 AND submitted_at IS NULL AND deadline <= now()', [resultMatch[1],JSON.stringify(exam.rows[0].questions)]);
-      const r = await query('SELECT student_name,student_no,started_at,submitted_at,score,total,answers FROM simple_attempts WHERE exam_id=$1 ORDER BY started_at DESC', [resultMatch[1]]); return send(res,200,{ title: exam.rows[0].title, questions:exam.rows[0].questions, results: r.rows });
+      await tx(async c => {
+        const expired = await c.query('SELECT * FROM simple_attempts WHERE exam_id=$1 AND submitted_at IS NULL AND deadline <= now() FOR UPDATE', [resultMatch[1]]);
+        for (const row of expired.rows) await finalize(c, { ...row, questions:exam.rows[0].questions });
+      });
+      const r = await query('SELECT token_hash AS attempt_id,student_name,student_no,started_at,submitted_at,score,total,pending,answers,manual_scores FROM simple_attempts WHERE exam_id=$1 ORDER BY started_at DESC', [resultMatch[1]]); return send(res,200,{ title: exam.rows[0].title, questions:exam.rows[0].questions, results: r.rows });
+    }
+    const gradeMatch = path.match(/^simple\/exams\/([\w-]+)\/grade$/);
+    if (gradeMatch && method === 'POST') {
+      const t = await teacher(req), b = await bodyOf(req);
+      if (!/^[a-f0-9]{64}$/.test(String(b.attemptId || '')) || typeof b.questionId !== 'string' || typeof b.points !== 'number' || !Number.isFinite(b.points)) throw fail(400, 'Invalid grade.');
+      const result = await tx(async c => {
+        const r = await c.query(`SELECT a.*,e.questions FROM simple_attempts a JOIN simple_exams e ON e.id=a.exam_id WHERE e.id=$1 AND e.teacher_id=$2 AND a.token_hash=$3 FOR UPDATE OF a`, [gradeMatch[1],t.id,b.attemptId]);
+        if (!r.rows[0]) throw fail(404, 'Attempt not found.');
+        const a = r.rows[0]; if (!a.submitted_at) throw fail(409, 'Submit the attempt before grading.');
+        const q = a.questions.find(q => q.id === b.questionId);
+        if (!q || b.points < 0 || b.points > (q.points ?? 1)) throw fail(400, 'Invalid grade.');
+        const manual = { ...a.manual_scores, [q.id]:{ points:b.points } }, grade = calculate(a.questions,a.answers,manual);
+        await c.query('UPDATE simple_attempts SET manual_scores=$2,score=$3,total=$4,pending=$5 WHERE token_hash=$1', [a.token_hash,JSON.stringify(manual),grade.score,grade.total,grade.pending]);
+        return grade;
+      });
+      return send(res,200,result);
     }
     if (path === 'simple/join' && method === 'POST') {
       const b = await bodyOf(req); const code = String(b.code || '').trim().toUpperCase(); const name = String(b.name || '').trim(); const no = String(b.number || '').trim();
       if (!code || name.length < 2 || name.length > 80 || no.length < 2 || no.length > 40) throw fail(400, 'Enter your exam code, full name and student number.');
       const token = crypto.randomBytes(32).toString('base64url');
-      const inserted = await query("INSERT INTO simple_attempts(token_hash,exam_id,student_name,student_no,deadline) SELECT $1,id,$3,$4,now()+(duration * interval '1 minute') FROM simple_exams WHERE code=$2 AND open=true RETURNING token_hash", [hash(token),code,name,no]);
-      if (!inserted.rowCount) throw fail(404, 'Exam not found or closed.');
+      // Serialize joining against bank edits; no attempt can start with a bank
+      // that is being replaced, and no edit can overwrite an existing attempt.
+      await tx(async c => {
+        const exam = await c.query('SELECT id,duration FROM simple_exams WHERE code=$1 AND open=true FOR UPDATE', [code]);
+        if (!exam.rows[0]) throw fail(404, 'Exam not found or closed.');
+        await c.query("INSERT INTO simple_attempts(token_hash,exam_id,student_name,student_no,deadline) VALUES($1,$2,$3,$4,now()+($5 * interval '1 minute'))", [hash(token),exam.rows[0].id,name,no,exam.rows[0].duration]);
+      });
       return send(res,201,{ token });
     }
     const attemptMatch = path.match(/^simple\/attempt(?:\/(answer|submit))?$/);
@@ -196,13 +267,19 @@ export default async function handler(req, res) {
         let a = await lockAttempt(c, token);
         if (!a.submitted_at && new Date(a.deadline).getTime() <= Date.now()) a = await finalize(c,a);
         if (action === 'answer') {
-          if (a.submitted_at) throw fail(409,'This attempt is already submitted.');
+          if (a.submitted_at) return { answerClosed:true };
           const q = a.questions.find(q => q.id === b.questionId);
-          if (!q || !Number.isInteger(b.answer) || b.answer < 0 || b.answer >= q.choices.length) throw fail(400,'Invalid answer.');
-          const r = await c.query('UPDATE simple_attempts SET answers=jsonb_set(answers, ARRAY[$2]::text[], to_jsonb($3::integer), true) WHERE token_hash=$1 RETURNING answers', [a.token_hash,q.id,b.answer]); a.answers = r.rows[0].answers;
+          if (!q) throw fail(400,'Invalid answer.');
+          const kind = q.kind || 'mcq', value = b.answer;
+          const validChoice = n => Number.isInteger(n) && n >= 0 && n < q.choices.length;
+          if ((kind === 'mcq' || kind === 'truefalse') && !validChoice(value)) throw fail(400,'Invalid answer.');
+          if (kind === 'multiselect' && (!Array.isArray(value) || value.length > q.choices.length || value.some(n => !validChoice(n)) || new Set(value).size !== value.length)) throw fail(400,'Invalid answer.');
+          if ((kind === 'short' || kind === 'essay') && (typeof value !== 'string' || value.length > 8000)) throw fail(400,'Invalid answer.');
+          const r = await c.query('UPDATE simple_attempts SET answers=jsonb_set(answers, ARRAY[$2]::text[], $3::jsonb, true) WHERE token_hash=$1 RETURNING answers', [a.token_hash,q.id,JSON.stringify(value)]); a.answers = r.rows[0].answers;
         } else if (action === 'submit') a = await finalize(c,a);
-        return { title:a.title, deadline:a.deadline, submitted:!!a.submitted_at, answers:a.answers, questions:publicQuestions(a.questions), score:a.submitted_at ? a.score : null, total:a.submitted_at ? a.total : null };
+        return { title:a.title, deadline:a.deadline, submitted:!!a.submitted_at, answers:a.answers, questions:publicQuestions(a.questions), score:a.submitted_at ? a.score : null, total:a.submitted_at ? a.total : null, pending:a.submitted_at ? a.pending : null };
       });
+      if (data.answerClosed) throw fail(409,'This attempt is already submitted.');
       return send(res,200,data);
     }
     throw fail(404, 'Unknown endpoint.');
