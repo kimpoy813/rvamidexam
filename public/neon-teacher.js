@@ -1,6 +1,7 @@
 const $ = s => document.querySelector(s);
 let token = sessionStorage.getItem('simple_teacher_token') || '';
 let selected = '', examList = [], resultsGeneration = 0, progressGeneration = 0, progressTimer;
+let currentProgress = null, currentResults = null, feedClearedAt = 0, feedExam = '';
 let editExamId = '', bankRevision = '', bankLocked = false, draftDirty = false, editorGeneration = 0, pasteSource = '', textDirty = false;
 async function api(path, body) {
   const res = await fetch('/api/simple/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { ...(body === undefined ? {} : { 'Content-Type':'application/json' }), ...(token ? { 'X-Teacher-Token': token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -140,7 +141,7 @@ function showSelection() {
 }
 function clearResults() {
   for (const selector of ['#joinedKpi', '#activeKpi', '#submittedKpi', '#averageKpi']) $(selector).textContent = '—';
-  $('#resultsTitle').textContent = 'Results'; $('#resultRows').replaceChildren();
+  currentResults=null; $('#releaseResults').disabled=true; $('#releaseStatus').textContent='Results hidden'; $('#resultsTitle').textContent = 'Scoreboard'; $('#resultRows').replaceChildren(); $('#itemRows').replaceChildren(); $('#hardItems').textContent='No assessed answers yet.'; $('#distribution').replaceChildren(); for(const id of ['resSubmitted','resAverage','resHighest','resLowest','resPassing','resPending']) $('#'+id).textContent='—'; $('#resMedian').textContent='median —';
 }
 async function exams() {
   const data = await api('exams'); examList = data.exams;
@@ -155,7 +156,7 @@ async function exams() {
     const row = document.createElement('div'); row.className = 'exam-row'; const details = document.createElement('div');
     const title = document.createElement('strong'); title.textContent = e.title; const meta = document.createElement('div'); meta.className = 'muted tiny'; meta.textContent = `Code: ${e.code} · ${e.duration} minutes · ${e.open ? 'Open' : 'Closed'}`; details.append(title, meta);
     const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-ghost btn-sm'; button.textContent = 'View results';
-    button.addEventListener('click', () => { selected = e.id; select.value = selected; showSelection(); view('results'); results().catch(err => message(err.message,true)); });
+    button.addEventListener('click', () => { selected = e.id; currentProgress=null; select.value = selected; showSelection(); progress(); view('results'); results().catch(err => message(err.message,true)); });
     const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'btn btn-ghost btn-sm'; toggle.textContent = e.open ? 'Close exam' : 'Open exam';
     toggle.addEventListener('click', async () => { toggle.disabled = true; try { await api(`exams/${encodeURIComponent(e.id)}/open`, { open: !e.open }); await exams(); } catch(err) { message(err.message,true); toggle.disabled = false; } });
     const actions = document.createElement('div'); actions.className = 'row wrap'; actions.append(button,toggle); row.append(details,actions); container.append(row);
@@ -167,14 +168,15 @@ async function results() {
   if (!examId) return;
   const data = await api(`exams/${encodeURIComponent(examId)}/results`);
   if (generation !== resultsGeneration || examId !== selected) return;
-  $('#resultsTitle').textContent = `${data.title} · Results`;
-  const done = data.results.filter(r => r.submitted_at); const final = done.filter(r => !r.pending); const totalScore = final.reduce((sum,r) => sum + (r.total ? r.score / r.total : 0), 0);
+  currentResults=data; $('#releaseResults').disabled=false; $('#releaseResults').textContent=data.resultsReleased ? 'Hide scores' : 'Release scores'; $('#releaseStatus').textContent=data.resultsReleased ? 'Scores released' : 'Results hidden'; $('#resultsTitle').textContent = 'Scoreboard'; renderAnalytics(data);
+  const done = data.results.filter(r => r.submitted_at); const final = done.filter(r => !r.pending && r.completion_reason !== 'invalidated'); const totalScore = final.reduce((sum,r) => sum + (r.total ? r.score / r.total : 0), 0);
   $('#joinedKpi').textContent = data.results.length; $('#submittedKpi').textContent = done.length; $('#activeKpi').textContent = data.results.length - done.length;
   $('#averageKpi').textContent = final.length ? `${Math.round(totalScore / final.length * 100)}%` : '—';
   const tbody = $('#resultRows'); tbody.replaceChildren();
   for (const r of data.results) {
     const tr = document.createElement('tr');
-    for (const text of [r.student_name, r.student_no, r.student_class || '—', r.student_section || '—', r.submitted_at ? (r.pending ? 'Needs grading' : 'Submitted') : 'In progress', r.submitted_at ? `${r.score} / ${r.total}${r.pending ? ` (${r.pending} pending)` : ''}` : '—']) { const td = document.createElement('td'); td.textContent = text; tr.append(td); }
+    const used=r.submitted_at ? Math.max(0,Math.round((new Date(r.submitted_at)-new Date(r.started_at))/60000)) : null;
+    for (const text of [r.student_name, r.student_no, r.student_class || '—', r.student_section || '—', r.completion_reason==='invalidated' ? 'Invalidated' : r.submitted_at ? (r.pending ? 'Needs grading' : r.completion_reason==='force_submitted' ? 'Teacher submitted' : 'Submitted') : 'In progress', r.submitted_at ? `${r.score} / ${r.total}${r.pending ? ` (${r.pending} pending)` : ''}` : '—', r.submitted_at && !r.pending && r.completion_reason!=='invalidated' && r.total ? `${Math.round(100*r.score/r.total)}%` : '—', used===null?'—':`${used} min`, Math.max(0,(r.integrity_events?.length||0)-(r.integrity_cleared_count||0)), r.submitted_at ? new Date(r.submitted_at).toLocaleString() : '—']) { const td = document.createElement('td'); td.textContent = text; tr.append(td); }
     const answerCell = document.createElement('td'); const details = document.createElement('details'); const summary = document.createElement('summary'); summary.textContent = 'View answers and grade'; details.append(summary); const list = document.createElement('ol');
     for (const q of data.questions) {
       const item = document.createElement('li'), answer = r.answers[q.id];
@@ -192,26 +194,90 @@ async function results() {
       const events=document.createElement('details'), summary=document.createElement('summary'); summary.textContent=`Integrity events (${r.integrity_events.length}${r.integrity_events.length>=500 ? ', limit reached' : ''})`;events.append(summary);
       const eventList=document.createElement('ul'); for(const event of r.integrity_events) { const li=document.createElement('li'); li.textContent=`${event.type.replaceAll('_',' ')} — ${new Date(event.at).toLocaleString()}`;eventList.append(li); } events.append(eventList);answerCell.append(events);
     }
-    answerCell.append(details); tr.append(answerCell); tbody.append(tr);
+    answerCell.append(details,actionControls(r,examId)); if(r.teacher_actions?.length){const history=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Teacher action history';history.append(summary);const list=document.createElement('ul');for(const event of r.teacher_actions){const item=document.createElement('li');item.textContent=`${event.action.replaceAll('_',' ')}${event.minutes ? ` (${event.minutes} min)` : ''} — ${new Date(event.at).toLocaleString()}`;list.append(item);}history.append(list);answerCell.append(history);} tr.append(answerCell); tbody.append(tr);
   }
-  if (!data.results.length) { const tr = document.createElement('tr'); const td = document.createElement('td'); td.colSpan = 7; td.textContent = 'No students have joined yet.'; tr.append(td); tbody.append(tr); }
+  if (!data.results.length) { const tr = document.createElement('tr'); const td = document.createElement('td'); td.colSpan = 11; td.textContent = 'No students have joined yet.'; tr.append(td); tbody.append(tr); }
 }
+function actionControls(attempt,examId) {
+  const details=document.createElement('details');details.className='teacher-actions';const summary=document.createElement('summary');summary.textContent='Student actions';details.append(summary);
+  const controls=document.createElement('div');controls.className='row wrap';
+  const isSubmitted=!!attempt.submitted_at, expired=attempt.deadline && new Date(attempt.deadline).getTime()<=Date.now();
+  const buttons=[];
+  if(!isSubmitted && !expired) buttons.push(['extend','+10 min',10],['extend','+30 min',30]);
+  if(!isSubmitted) buttons.push(['force_submit','Submit for them']); else buttons.push(['reopen','Reopen attempt']);
+  const flagCount=attempt.integrity_count ?? Math.max(0,(attempt.integrity_events?.length||0)-(attempt.integrity_cleared_count||0));
+  if(flagCount) buttons.push(['dismiss_flag','Clear flags']);
+  if(attempt.completion_reason!=='invalidated') buttons.push(['invalidate','Invalidate']);
+  for(const [action,label,minutes] of buttons){const button=document.createElement('button');button.type='button';button.className=`btn btn-sm ${action==='invalidate'?'btn-danger':'btn-ghost'}`;button.textContent=label;
+    button.addEventListener('click',async()=>{
+      const questions={extend:`Add ${minutes} minutes to this student's overall deadline? Part timers are not extended.`,force_submit:'Submit the saved answers for this student? Unsaved changes may be lost.',invalidate:'Invalidate this attempt? It will be excluded from score statistics.',reopen:'Reopen this attempt? Saved answers remain, but manual grades are cleared. Existing part locks and part timers remain in effect. The student must check the original result tab.',dismiss_flag:'Clear the current flags? The event history will remain visible.'};
+      if(!confirm(questions[action]))return;controls.querySelectorAll('button').forEach(b=>b.disabled=true);
+      try {await api(`exams/${encodeURIComponent(examId)}/action`,{attemptId:attempt.attempt_id,action,...(minutes?{minutes}:{})}); if(selected===examId){await Promise.all([progress(),results()]);}message('Student action saved.');}
+      catch(err){message(err.message,true);controls.querySelectorAll('button').forEach(b=>b.disabled=false);}
+    });controls.append(button);
+  }
+  details.append(controls);return details;
+}
+function renderAnalytics(data) {
+  const submitted=data.results.filter(r=>r.submitted_at), final=submitted.filter(r=>!r.pending && r.total>0 && r.completion_reason!=='invalidated'), scores=final.map(r=>100*r.score/r.total).sort((a,b)=>a-b);
+  const pct=n=>`${Math.round(n)}%`, avg=scores.length ? scores.reduce((a,b)=>a+b,0)/scores.length : null;
+  const median=scores.length ? (scores[Math.floor((scores.length-1)/2)]+scores[Math.floor(scores.length/2)])/2 : null;
+  $('#resSubmitted').textContent=`${submitted.length}/${data.results.length}`; $('#resAverage').textContent=avg===null?'—':pct(avg); $('#resMedian').textContent=`median ${median===null?'—':pct(median)}`;
+  $('#resHighest').textContent=scores.length?pct(scores.at(-1)):'—'; $('#resLowest').textContent=scores.length?pct(scores[0]):'—'; $('#resPassing').textContent=String(scores.filter(n=>n>=75).length);
+  $('#resPending').textContent=String(data.analysis.reduce((n,q)=>n+q.awaiting,0));
+  const buckets=[0,0,0,0,0]; for(const score of scores) buckets[Math.max(0,Math.min(4,Math.floor(score/20)))]++;
+  const dist=$('#distribution'); dist.replaceChildren(); const max=Math.max(1,...buckets);
+  buckets.forEach((count,i)=>{const col=document.createElement('div'); col.className='dist-col'; const val=document.createElement('div');val.className='dist-val';val.textContent=count;const bar=document.createElement('div');bar.className='dist-bar';bar.style.height=`${Math.max(3,count/max*100)}px`;const label=document.createElement('div');label.className='dist-lab';label.textContent=i===4?'80–100%':`${i*20}–${i*20+19}%`;col.append(val,bar,label);dist.append(col);});
+  const rows=$('#itemRows');rows.replaceChildren(); for(const q of data.analysis){const tr=document.createElement('tr'); const vals=[q.index+1,q.prompt,q.kind,q.points,q.correct,q.answered,q.assessed?`${pct(q.correct/q.assessed*100)} correct (${q.assessed} assessed)`:'No data'];for(const value of vals){const td=document.createElement('td');td.textContent=value;tr.append(td);}rows.append(tr);}
+  if(!data.analysis.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=7;td.textContent='No questions yet.';tr.append(td);rows.append(tr);}
+  const hardest=$('#hardItems');hardest.replaceChildren(); const ranked=data.analysis.filter(q=>q.assessed).sort((a,b)=>a.correct/a.assessed-b.correct/b.assessed).slice(0,5);
+  if(!ranked.length) hardest.textContent='No assessed answers yet.';
+  for(const q of ranked){const row=document.createElement('div');row.className='exam-row';const title=document.createElement('span');title.textContent=`${q.index+1}. ${q.prompt}`;const rate=document.createElement('strong');rate.textContent=pct(q.correct/q.assessed*100);row.append(title,rate);hardest.append(row);}
+}
+function renderMonitor(data) {
+  const attempts=data.attempts, active=attempts.filter(a=>!a.submitted_at && new Date(a.deadline).getTime()>Date.now());
+  $('#onlineKpi').textContent=attempts.filter(a=>a.recently_seen).length; $('#joinedKpi').textContent=attempts.length; $('#submittedKpi').textContent=attempts.filter(a=>a.submitted_at).length;
+  $('#activeKpi').textContent=active.length; $('#progressKpi').textContent=active.length && data.total ? `${Math.round(active.reduce((n,a)=>n+a.answered/data.total,0)/active.length*100)}%` : '0%';
+  const final=attempts.filter(a=>a.submitted_at && !a.pending && a.total>0 && a.completion_reason!=='invalidated'); $('#averageKpi').textContent=final.length ? `${Math.round(final.reduce((n,a)=>n+a.score/a.total,0)/final.length*100)}%` : '—';
+  $('#needsKpi').textContent=attempts.filter(a=>a.submitted_at && a.pending>0 && a.completion_reason!=='invalidated').length; $('#flagsKpi').textContent=attempts.reduce((n,a)=>n+a.integrity_count,0); $('#rosterCount').textContent=`${attempts.length} joined`;
+  const search=$('#rosterSearch').value.trim().toLowerCase(), filter=$('#rosterFilter').value;
+  const shown=attempts.filter(a=>{
+    const matches=[a.student_name,a.student_no,a.student_class,a.student_section].some(v=>String(v||'').toLowerCase().includes(search));
+    return matches && (filter==='all' || filter==='online' && a.recently_seen || filter==='active' && !a.submitted_at && new Date(a.deadline).getTime()>Date.now() || filter==='submitted' && a.submitted_at || filter==='flagged' && a.integrity_count>0 || filter==='manual' && a.submitted_at && a.pending>0 && a.completion_reason!=='invalidated');
+  });
+  const rows=$('#progressRows');rows.replaceChildren();if(!shown.length) rows.textContent=attempts.length?'No students match this filter.':'No students have joined yet.';
+  for(const a of shown){const row=document.createElement('div');row.className='exam-row';const name=document.createElement('strong');name.textContent=`${a.student_name} (${a.student_no})${a.student_class || a.student_section ? ` · ${[a.student_class,a.student_section].filter(Boolean).join(' / ')}` : ''}`;const status=document.createElement('span');status.className='muted tiny';const state=a.completion_reason==='invalidated'?'Invalidated':a.submitted_at?(a.completion_reason==='force_submitted'?'Teacher submitted':'Submitted'):new Date(a.deadline).getTime()<=Date.now()?'Time expired':'In progress';status.textContent=`${a.answered} / ${data.total} saved · ${state} · ${a.recently_seen?'Recently connected':'No recent heartbeat'} · ${a.integrity_count} integrity event(s)`;row.append(name,status,actionControls(a,selected));rows.append(row);}
+  const events=[]; for(const a of attempts){for(const e of a.integrity_events||[]) events.push({at:e.at,text:`${a.student_name}: ${e.type.replaceAll('_',' ')}`});if(a.submitted_at)events.push({at:a.submitted_at,text:`${a.student_name}: submitted`});}
+  const feed=$('#activityFeed');feed.replaceChildren();const visible=events.filter(e=>new Date(e.at).getTime()>feedClearedAt).sort((a,b)=>new Date(b.at)-new Date(a.at)).slice(0,100);
+  if(!visible.length){const empty=document.createElement('div');empty.className='feed-empty';empty.textContent='Integrity events and submissions will appear here as the dashboard refreshes.';feed.append(empty);}
+  for(const event of visible){const row=document.createElement('div');row.className='feed-item info';const text=document.createElement('div');text.textContent=event.text;const when=document.createElement('div');when.className='feed-when';when.textContent=new Date(event.at).toLocaleString();text.append(when);row.append(text);feed.append(row);}
+}
+$('#rosterSearch').addEventListener('input',()=>{if(currentProgress)renderMonitor(currentProgress);});
+$('#rosterFilter').addEventListener('change',()=>{if(currentProgress)renderMonitor(currentProgress);});
+$('#clearFeed').addEventListener('click',()=>{feedClearedAt=Date.now();if(currentProgress)renderMonitor(currentProgress);});
+function csvCell(value){ const text=String(value ?? ''); const safe=/^[\s\u0000-\u001f]*[=+@-]/.test(text) ? "'"+text : text;return `"${safe.replaceAll('"','""')}"`; }
+$('#releaseResults').addEventListener('click',async e=>{
+  if(!currentResults || !selected) return;
+  const button=e.currentTarget,examId=selected,released=!currentResults.resultsReleased;
+  if(!confirm(released ? 'Release scores for submitted attempts? Scores awaiting manual grading will be shown as provisional.' : 'Hide scores again? Students who already saw or saved their scores will still know them.'))return;
+  button.disabled=true;
+  try {await api(`exams/${encodeURIComponent(examId)}/release-results`,{released});if(selected===examId) await results();message(released?'Scores released.':'Scores hidden.');}
+  catch(err){message(err.message,true);if(selected===examId)button.disabled=false;}
+});
+$('#exportCsv').addEventListener('click',()=>{
+  if(!currentResults) return message('Select an exam and wait for results to load.',true);
+  const rows=[['Student','Student number','Class','Section','Status','Score','Total','Pending points','Integrity events','Started','Submitted']];
+  for(const r of currentResults.results) rows.push([r.student_name,r.student_no,r.student_class,r.student_section,r.completion_reason==='invalidated' ? 'Invalidated' : r.submitted_at ? r.pending?'Needs grading':r.completion_reason==='force_submitted'?'Teacher submitted':'Submitted' : 'In progress',r.submitted_at?r.score:'',r.submitted_at?r.total:'',r.submitted_at?r.pending:'',Math.max(0,(r.integrity_events?.length||0)-(r.integrity_cleared_count||0)),r.started_at,r.submitted_at]);
+  const csv='\ufeff'+rows.map(row=>row.map(csvCell).join(',')).join('\r\n');const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='exam-results.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+});
 async function progress() {
   const examId = selected, generation = ++progressGeneration;
-  if (!examId) { $('#progressRows').textContent = 'Select an exam.'; return; }
+  if (!examId) { currentProgress=null; $('#progressRows').textContent = 'Select an exam.'; $('#activityFeed').replaceChildren(); return; }
   try {
     const data = await api(`exams/${encodeURIComponent(examId)}/progress`);
     if (generation !== progressGeneration || examId !== selected || !token) return;
-    const rows = $('#progressRows'); rows.replaceChildren();
-    if (!data.attempts.length) rows.textContent = 'No students have joined yet.';
-    for (const attempt of data.attempts) {
-      const row = document.createElement('div'); row.className = 'exam-row';
-      const name = document.createElement('strong'); name.textContent = `${attempt.student_name} (${attempt.student_no})${attempt.student_class || attempt.student_section ? ` · ${[attempt.student_class,attempt.student_section].filter(Boolean).join(' / ')}` : ''}`;
-      const status = document.createElement('span'); status.className = 'muted tiny';
-      const state = attempt.submitted_at ? 'Submitted' : new Date(attempt.deadline).getTime() <= Date.now() ? 'Time expired' : 'Not submitted';
-      status.textContent = `${attempt.answered} / ${data.total} saved · ${state}`; row.append(name, status); rows.append(row);
-    }
-    $('#progressStatus').textContent = 'Saved progress refreshes every 10 seconds. This does not show whether students are online or provide integrity alerts.';
+    currentProgress=data; if(feedExam!==examId){feedExam=examId;feedClearedAt=0;} renderMonitor(data);
+    $('#progressStatus').textContent = 'Refreshes every 10 seconds. Recent connection is based on a heartbeat, not proof of attention; offline events may not be recorded. See Results for event details.';
   } catch (err) {
     if (generation === progressGeneration && examId === selected && token) $('#progressStatus').textContent = `Could not refresh progress: ${err.message}`;
   }
@@ -219,18 +285,18 @@ async function progress() {
 async function showDashboard() { const me = await api('me'); $('#auth').classList.add('hidden'); $('#dashboard').classList.remove('hidden'); $('#welcome').textContent = `Teacher dashboard · ${me.username}`; await exams(); await progress(); clearInterval(progressTimer); progressTimer = setInterval(() => { if (!document.hidden) progress(); }, 10000); }
 $('#login').addEventListener('submit', async e => { e.preventDefault(); const b = e.currentTarget.querySelector('[type=submit]'); b.disabled = true; try { const r = await api('login', { username:$('#username').value.trim(), password:$('#password').value }); token = r.token; sessionStorage.setItem('simple_teacher_token',token); $('#password').value = ''; await showDashboard(); message('Signed in.'); } catch(err) { message(err.message,true); } finally { b.disabled = false; } });
 $('#register').addEventListener('click', async e => { const button = e.currentTarget; button.disabled = true; try { await api('register', { username:$('#username').value.trim(), password:$('#password').value }); message('Account created. Please sign in.'); } catch(err) { message(err.message,true); } finally { button.disabled = false; } });
-$('#logout').addEventListener('click', async () => { try { await api('logout', {}); } catch {} sessionStorage.removeItem('simple_teacher_token'); token = ''; selected = ''; resultsGeneration++; progressGeneration++; clearInterval(progressTimer); newDraft(); $('#importText').value = ''; $('#importPreview').replaceChildren(); $('#dashboard').classList.add('hidden'); $('#auth').classList.remove('hidden'); message('Signed out.'); });
+$('#logout').addEventListener('click', async () => { try { await api('logout', {}); } catch {} sessionStorage.removeItem('simple_teacher_token'); token = ''; selected = ''; currentProgress=null; currentResults=null; resultsGeneration++; progressGeneration++; clearInterval(progressTimer); newDraft(); $('#importText').value = ''; $('#importPreview').replaceChildren(); $('#dashboard').classList.add('hidden'); $('#auth').classList.remove('hidden'); message('Signed out.'); });
 $('#examSelect').addEventListener('change', e => {
   const editing=!$('#questionsView').classList.contains('hidden');
   if(editing && (draftDirty || textDirty) && !confirm('Discard unsaved question-bank changes and switch exams?')) { e.target.value=selected; return; }
-  selected=e.target.value; editorGeneration++; showSelection(); $('#progressRows').textContent='Loading saved progress…'; progress(); results().catch(err=>message(err.message,true));
+  currentProgress=null; $('#progressRows').textContent='Loading saved progress…'; $('#activityFeed').replaceChildren(); selected=e.target.value; editorGeneration++; showSelection(); $('#progressRows').textContent='Loading saved progress…'; progress(); results().catch(err=>message(err.message,true));
   if(editing && selected) loadBank({confirmed:true}).catch(err=>message(err.message,true));
 });
 $('#newExam').addEventListener('click', () => { if ((draftDirty || textDirty) && !confirm('Discard unsaved pasted text and question edits and start a new exam?')) return; newDraft(); view('questions'); });
 $('#loadBank').addEventListener('click', () => loadBank().catch(err => message(err.message,true)));
 $('#showFormat').addEventListener('click', () => $('#formatHelp').classList.toggle('hidden'));
 $('#create').addEventListener('input', () => { dirty(); counts(); }); $('#create').addEventListener('change', () => { dirty(); counts(); });
-document.querySelectorAll('[data-view]').forEach(tab => tab.addEventListener('click', () => { view(tab.dataset.view); if (tab.dataset.view === 'results') results().catch(err => message(err.message,true)); if (tab.dataset.view === 'questions' && selected && selected !== editExamId) loadBank().catch(err => message(err.message,true)); }));
+document.querySelectorAll('[data-view]').forEach(tab => tab.addEventListener('click', () => { view(tab.dataset.view); if (tab.dataset.view === 'overview') progress(); if (tab.dataset.view === 'results') results().catch(err => message(err.message,true)); if (tab.dataset.view === 'questions' && selected && selected !== editExamId) loadBank().catch(err => message(err.message,true)); }));
 $('#refreshExams').addEventListener('click', () => exams().catch(err => message(err.message,true)));
 $('#addQuestion').addEventListener('click', () => { editor(); dirty(); });
 $('#addPart').addEventListener('click', () => { const p=part(); editor(null,p); dirty(); }); $('#refreshResults').addEventListener('click', () => results().catch(err => message(err.message,true)));

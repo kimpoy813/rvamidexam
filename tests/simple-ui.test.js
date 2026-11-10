@@ -47,9 +47,10 @@ test('simplified teacher and student interfaces complete an exam', { skip: !url,
     await wait(()=>/Question bank saved/.test(t.querySelector('#message').textContent));
 
     studentDom = new JSDOM(fs.readFileSync(new URL('../public/neon.html', import.meta.url),'utf8'), { url:base+'/' }); let channel; studentDom.window.BroadcastChannel=class { constructor(){channel=this;} postMessage(){} close(){this.closed=true;} }; use(studentDom); await import('../public/neon-student.js?simple-ui-test'); const s = studentDom.window.document;
-    fill(s.querySelector('#code'),code); fill(s.querySelector('#name'),'Test Student'); fill(s.querySelector('#number'),'001'); fill(s.querySelector('#studentClass'),'Grade 10'); fill(s.querySelector('#studentSection'),'A'); s.querySelector('#joinForm').dispatchEvent(new studentDom.window.Event('submit',{bubbles:true,cancelable:true}));
+    fill(s.querySelector('#code'),code); fill(s.querySelector('#name'),'Test Student'); fill(s.querySelector('#number'),'001'); fill(s.querySelector('#studentClass'),'Grade 10'); fill(s.querySelector('#studentSection'),'=Section'); s.querySelector('#joinForm').dispatchEvent(new studentDom.window.Event('submit',{bubbles:true,cancelable:true}));
     await wait(()=>s.querySelectorAll('.choice input').length===4); const radio=s.querySelector('.choice input'); radio.checked=true; radio.dispatchEvent(new studentDom.window.Event('change',{bubbles:true})); await wait(()=>/Answer saved/.test(s.querySelector('#save').textContent));
-    channel.onmessage({data:'present'}); assert.match(s.querySelector('#message').textContent,/another tab/);
+    channel.onmessage({data:'present'}); assert.match(s.querySelector('#message').textContent,/another tab/); assert.equal(s.querySelector('#integrityVeil').classList.contains('hidden'),false); s.querySelector('#integrityContinue').click();
+    Object.defineProperty(s,'hidden',{configurable:true,value:true}); s.dispatchEvent(new studentDom.window.Event('visibilitychange')); assert.match(s.querySelector('#integrityBody').textContent,/recorded/); s.querySelector('#integrityContinue').click();
     for(const type of ['copy','cut','paste']) {const event=new studentDom.window.Event(type,{bubbles:true,cancelable:true});s.querySelector('#questions').dispatchEvent(event);assert.equal(event.defaultPrevented,true);}
     await new Promise(resolve=>setTimeout(resolve,200));
     assert.equal(s.querySelector('#progress').textContent, '1 / 2'); s.querySelector('#next').click(); assert.equal(s.querySelector('#qChip').textContent, 'Question 2');
@@ -59,8 +60,25 @@ test('simplified teacher and student interfaces complete an exam', { skip: !url,
     use(teacherDom); t.querySelector('[data-view=questions]').click(); t.querySelector('#loadBank').click();
     await wait(()=>/Question bank locked/.test(t.querySelector('#draftStatus').textContent)); assert.equal(t.querySelector('#saveBank').disabled,true);
     t.querySelector('[data-view=results]').click(); await wait(()=>/Test Student/.test(t.querySelector('#resultRows').textContent));
-    assert.match(t.querySelector('#resultRows').textContent,/Integrity events \(4\)/); for(const type of ['copy','cut','paste','second tab']) assert.match(t.querySelector('#resultRows').textContent,new RegExp(type));
+    assert.match(t.querySelector('#resultRows').textContent,/Integrity events \(5\)/); for(const type of ['copy','cut','paste','second tab','tab hidden']) assert.match(t.querySelector('#resultRows').textContent,new RegExp(type));
     assert.match(t.querySelector('#resultRows').textContent,/Grade 10/); assert.match(t.querySelector('#resultRows').textContent,/2 \/ 2/); assert.equal(t.querySelector('#joinedKpi').textContent, '1');
+    assert.equal(t.querySelector('#resSubmitted').textContent,'1/1'); assert.equal(t.querySelector('#resAverage').textContent,'100%'); assert.equal(t.querySelector('#resHighest').textContent,'100%'); assert.equal(t.querySelector('#resPassing').textContent,'1'); assert.equal(t.querySelectorAll('#itemRows tr').length,2); assert.match(t.querySelector('#hardItems').textContent,/100%/); assert.match(t.querySelector('#distribution').textContent,/80–100%/);
+    let exported; const priorCreate=URL.createObjectURL,priorRevoke=URL.revokeObjectURL,priorClick=teacherDom.window.HTMLAnchorElement.prototype.click; URL.createObjectURL=blob=>{exported=blob;return 'blob:test';}; URL.revokeObjectURL=()=>{};teacherDom.window.HTMLAnchorElement.prototype.click=()=>{};
+    t.querySelector('#exportCsv').click(); const csv=await exported.text(); assert.match(csv,/Test Student/);assert.match(csv,/Grade 10/); assert.match(csv,/'=Section/); URL.createObjectURL=priorCreate; URL.revokeObjectURL=priorRevoke;teacherDom.window.HTMLAnchorElement.prototype.click=priorClick;
+    t.querySelector('#refreshExams').click(); await wait(()=>/tab hidden/.test(t.querySelector('#activityFeed').textContent));assert.equal(t.querySelector('#flagsKpi').textContent,'5');
+    t.querySelector('#rosterSearch').value='no match';t.querySelector('#rosterSearch').dispatchEvent(new teacherDom.window.Event('input',{bubbles:true}));assert.match(t.querySelector('#progressRows').textContent,/No students match/);
+    t.querySelector('#rosterSearch').value='Test Student';t.querySelector('#rosterSearch').dispatchEvent(new teacherDom.window.Event('input',{bubbles:true}));assert.match(t.querySelector('#progressRows').textContent,/Test Student/);
+    t.querySelector('#clearFeed').click();assert.doesNotMatch(t.querySelector('#activityFeed').textContent,/tab hidden/);
+    const key=s.querySelector('#resultKeyDisplay').textContent;assert.match(key,/^[A-Za-z0-9_-]{22}$/);
+    t.querySelector('#releaseResults').click();await wait(()=>/Scores released/.test(t.querySelector('#releaseStatus').textContent));
+    use(studentDom);s.querySelector('#resultCode').value=code;s.querySelector('#resultNumber').value='001';s.querySelector('#resultKeyInput').value=key;s.querySelector('#resultLookup').dispatchEvent(new studentDom.window.Event('submit',{bubbles:true,cancelable:true}));await wait(()=>/2 \/ 2/.test(s.querySelector('#lookupResult').textContent));
+    use(teacherDom);
+
+    const reopen=[...t.querySelectorAll('#resultRows .teacher-actions button')].find(b=>b.textContent==='Reopen attempt');assert.ok(reopen);reopen.click();await wait(()=>/Student action saved/.test(t.querySelector('#message').textContent));
+    use(studentDom);s.querySelector('#checkReopen').click();await wait(()=>!s.querySelector('#exam').classList.contains('hidden'));assert.equal(s.querySelector('#result').classList.contains('hidden'),true);assert.equal(s.querySelector('.choice input').checked,true);
+    s.querySelector('#submit').click();await wait(()=>!s.querySelector('#result').classList.contains('hidden'));
+
+
   } finally {
     teacherDom?.window.close(); studentDom?.window.close(); for (const [key,value] of Object.entries(original)) { if (value === undefined) delete globalThis[key]; else globalThis[key]=value; }
     server.closeAllConnections(); await new Promise(r=>server.close(r)); await closeTestPool(); delete process.env.DATABASE_URL;

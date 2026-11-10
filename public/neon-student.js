@@ -34,7 +34,7 @@ function record(q, value, debounce=false) {
 }
 // Browser events are best-effort signals, not proof of cheating. They do not
 // detect another browser profile or physical device with different credentials.
-let monitoring=false, tabChannel=null, tabPing=null, lastSecondTab=0;
+let monitoring=false, tabChannel=null, tabPing=null, heartbeatTimer=null, lastSecondTab=0, heartbeatInFlight=false;
 function flag(type) {
   api('attempt/integrity',{type}).catch(()=>error('An integrity event could not be recorded. Check your connection and notify your teacher.'));
 }
@@ -42,22 +42,43 @@ for (const type of ['copy','cut','paste']) document.addEventListener(type,e=>{
   if(!monitoring) return;
   e.preventDefault(); flag(type); error(`${type[0].toUpperCase()+type.slice(1)} is not allowed during the exam.`);
 },true);
+function showIntegrityWarning(text) {
+  $('#integrityBody').textContent=text; $('#integrityVeil').classList.remove('hidden');
+  $('#exam').inert=true; $('#integrityContinue').focus();
+}
+$('#integrityContinue').addEventListener('click',()=>{ $('#integrityVeil').classList.add('hidden'); $('#exam').inert=false; });
+document.addEventListener('visibilitychange',()=>{
+  if(monitoring && document.hidden) { flag('tab_hidden'); showIntegrityWarning('Leaving the exam tab is recorded and reported to your teacher. Return to the exam to continue.'); }
+});
+async function heartbeat() {
+  if(!monitoring || heartbeatInFlight) return;
+  heartbeatInFlight=true;
+  try { const state=await api('attempt/heartbeat',{}); if(state.submitted && monitoring && !submitting) await load(); else if(monitoring && paper && state.deadline) { paper.deadline=state.deadline; serverOffset=new Date(state.serverTime).getTime()-Date.now(); } }
+  catch { /* A missed heartbeat is not evidence of misconduct. */ }
+  finally { heartbeatInFlight=false; }
+}
 function startMonitoring() {
   if(monitoring) return;
-  monitoring=true;
+  monitoring=true; heartbeat(); heartbeatTimer=setInterval(heartbeat,10000);
   if(typeof window.BroadcastChannel !== 'function') return;
   tabChannel=new window.BroadcastChannel(`simple-exam-${token}`);
-  const report=()=>{ if(Date.now()-lastSecondTab<10000) return; lastSecondTab=Date.now();flag('second_tab');error('This exam is open in another tab or window. Close the other copy.'); };
+  const report=()=>{ if(Date.now()-lastSecondTab<10000) return; lastSecondTab=Date.now();flag('second_tab');error('This exam is open in another tab or window. Close the other copy.');showIntegrityWarning('This exam is open in another tab or window. Close the other copy before continuing.'); };
   tabChannel.onmessage=e=>{ if(e.data==='hello'){report();tabChannel?.postMessage('present');} else if(e.data==='present') report(); };
   tabChannel.postMessage('hello');
   tabPing=setInterval(()=>tabChannel?.postMessage('hello'),5000);
 }
-function stopMonitoring() { monitoring=false;clearInterval(tabPing);tabPing=null;tabChannel?.close();tabChannel=null; }
+function stopMonitoring() { monitoring=false;clearInterval(tabPing);clearInterval(heartbeatTimer);heartbeatTimer=null;tabPing=null;tabChannel?.close();tabChannel=null; }
+async function ensureResultKey() {
+  let key=sessionStorage.getItem('simple_result_key');
+  if(!key && token) { const r=await api('attempt/result-key',{}); key=r.resultKey;sessionStorage.setItem('simple_result_key',key); }
+  return key;
+}
 function showResult(a) {
-  stopMonitoring(); clearInterval(clock); for (const item of scheduled.values()) clearTimeout(item.timer); scheduled.clear();
+  const unsaved=scheduled.size || pending || failed.size;
+  stopMonitoring(); $('#integrityVeil').classList.add('hidden'); $('#exam').inert=false; clearInterval(clock); for (const item of scheduled.values()) clearTimeout(item.timer); scheduled.clear();
   $('#exam').classList.add('hidden'); $('#join').classList.add('hidden'); $('#result').classList.remove('hidden');
-  $('#score').textContent=`Your teacher will release the results.${failed.size ? ' Some answers could not be saved before submission.' : ''}`;
-  sessionStorage.removeItem('simple_exam_token');
+  $('#resultKeyDisplay').textContent=sessionStorage.getItem('simple_result_key') || 'Unavailable — use the button below to retry.';
+  $('#score').textContent=`${a.completionReason==='invalidated' ? 'Your teacher invalidated this attempt. ' : ''}Your teacher will release the results.${unsaved ? ' Some changes may not have been saved before submission.' : ''}`;
 }
 function palette() {
   const target=$('#palette'); target.replaceChildren();
@@ -101,8 +122,9 @@ function tick() {
   if(!seconds && !moving){clearInterval(clock);finish(true);}
 }
 function render(a) {
+  submitting=false; moving=false; failed.clear(); versions.clear(); $('#submit').disabled=false; $('#submitTop').disabled=false;
   applyState(a); startMonitoring(); const index=a.questions.findIndex(q=>(q.section?.index ?? 0)===a.currentSection); current=Math.max(0,index);
-  $('#join').classList.add('hidden'); $('#exam').classList.remove('hidden'); document.body.classList.add('exam-body'); $('#title').textContent=a.title; paint();
+  $('#result').classList.add('hidden'); $('#join').classList.add('hidden'); $('#exam').classList.remove('hidden'); document.body.classList.add('exam-body'); $('#title').textContent=a.title; paint();
   clearInterval(clock); clock=setInterval(tick,1000); tick();
 }
 async function go(index) {
@@ -117,7 +139,7 @@ async function go(index) {
     const wanted=paper.questions[index].id; applyState(a); current=paper.questions.findIndex(q=>q.id===wanted); if(current<0) current=0; moving=false; paint(); tick();
   } catch(e){ error(e.message); moving=false; paint(); }
 }
-async function load(){const a=await api('attempt'); if(a.submitted) showResult(a); else render(a);}
+async function load(){const a=await api('attempt'); try {await ensureResultKey();} catch { error('Could not create your private result key. You can retry after submitting.'); } if(a.submitted) showResult(a); else render(a);}
 async function finish(expired=false) {
   const buttons=[$('#submit'),$('#submitTop')]; if(submitting || moving) return;
   if(!expired && !confirm('Submit your exam? You cannot change answers afterward.')) return;
@@ -129,9 +151,21 @@ const retry=document.createElement('button'); retry.type='button'; retry.id='ret
 retry.addEventListener('click',()=>{for(const [id,item] of [...failed]) {failed.delete(id); queueSave(id,item.value,item.version);} status();});
 const discard=document.createElement('button'); discard.type='button'; discard.id='discardSaves'; discard.className='btn btn-ghost btn-sm hidden'; discard.textContent='Discard unsaved answers'; retry.after(discard);
 discard.addEventListener('click',()=>{ if(!confirm('Discard unsaved changes and keep the last saved answers?')) return; for(const id of failed.keys()){ if(confirmed[id] === undefined) delete paper.answers[id]; else paper.answers[id]=confirmed[id]; } failed.clear(); $('#message').classList.add('hidden'); status(); paint(); });
+$('#resultLookup').addEventListener('submit',async e=>{
+  e.preventDefault();const button=e.currentTarget.querySelector('button');button.disabled=true;const output=$('#lookupResult');output.textContent='Checking…';
+  try {const r=await api('result-lookup',{code:$('#resultCode').value,number:$('#resultNumber').value,resultKey:$('#resultKeyInput').value});output.textContent=`${r.title}: ${r.score} / ${r.total}${r.pending ? ` (${r.pending} points awaiting grading; score is provisional)` : ''}`;}
+  catch(err){output.textContent=err.message;}finally{button.disabled=false;}
+});
+$('#copyResultKey').addEventListener('click',async e=>{
+  const button=e.currentTarget;button.disabled=true;
+  try { const key=await ensureResultKey();$('#resultKeyDisplay').textContent=key;if(!navigator.clipboard?.writeText) throw new Error('Copy is unavailable. Write down the key shown above.');await navigator.clipboard.writeText(key);error('Result key copied. Keep it private.'); }
+  catch(err){error(err.message || 'Could not retrieve the result key. Try again.');}finally{button.disabled=false;}
+});
+$('#checkReopen').addEventListener('click',async e=>{const button=e.currentTarget;button.disabled=true;try {await queue;const a=await api('attempt');if(a.submitted) error('The attempt is still submitted. Ask your teacher if you need it reopened.');else {$('#message').classList.add('hidden');render(a);}} catch(err){error(err.message);} finally{button.disabled=false;}});
+$('#newAttempt').addEventListener('click',()=>{ if(!confirm('Have you saved your private result key? Leaving also prevents checking whether this attempt was reopened in this tab.')) return;sessionStorage.removeItem('simple_exam_token');sessionStorage.removeItem('simple_result_key');token='';window.location.reload(); });
 $('#prev').addEventListener('click',()=>go(current-1));
 $('#next').addEventListener('click',()=>go(current+1));
 $('#submit').addEventListener('click',()=>finish()); $('#submitTop').addEventListener('click',()=>finish());
-$('#joinForm').addEventListener('submit',async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');b.disabled=true;$('#message').classList.add('hidden');try {const r=await api('join',{code:$('#code').value,name:$('#name').value,number:$('#number').value,studentClass:$('#studentClass').value,studentSection:$('#studentSection').value});token=r.token;sessionStorage.setItem('simple_exam_token',token);await load();} catch(e){error(e.message);} finally {b.disabled=false;}});
+$('#joinForm').addEventListener('submit',async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');b.disabled=true;$('#message').classList.add('hidden');try {const r=await api('join',{code:$('#code').value,name:$('#name').value,number:$('#number').value,studentClass:$('#studentClass').value,studentSection:$('#studentSection').value});token=r.token;sessionStorage.setItem('simple_exam_token',token);sessionStorage.setItem('simple_result_key',r.resultKey);await load();} catch(e){error(e.message);} finally {b.disabled=false;}});
 window.addEventListener('beforeunload', e => { if (scheduled.size || pending || failed.size) { e.preventDefault(); e.returnValue = ''; } });
 if(token) load().catch(e=>error(e.message));
