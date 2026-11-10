@@ -36,7 +36,7 @@ function record(q, value, debounce=false) {
 // detect another browser profile or physical device with different credentials.
 let monitoring=false, tabChannel=null, tabPing=null, heartbeatTimer=null, lastSecondTab=0, heartbeatInFlight=false;
 function flag(type) {
-  api('attempt/integrity',{type}).catch(()=>error('An integrity event could not be recorded. Check your connection and notify your teacher.'));
+  api('attempt/integrity',{type}).then(state=>{if(state.submitted && monitoring && !submitting) load().catch(err=>error(err.message));}).catch(()=>error('An integrity event could not be recorded. Check your connection and notify your teacher.'));
 }
 for (const type of ['copy','cut','paste']) document.addEventListener(type,e=>{
   if(!monitoring) return;
@@ -78,7 +78,7 @@ function showResult(a) {
   stopMonitoring(); $('#integrityVeil').classList.add('hidden'); $('#exam').inert=false; clearInterval(clock); for (const item of scheduled.values()) clearTimeout(item.timer); scheduled.clear();
   $('#exam').classList.add('hidden'); $('#join').classList.add('hidden'); $('#result').classList.remove('hidden');
   $('#resultKeyDisplay').textContent=sessionStorage.getItem('simple_result_key') || 'Unavailable — use the button below to retry.';
-  $('#score').textContent=`${a.completionReason==='invalidated' ? 'Your teacher invalidated this attempt. ' : ''}Your teacher will release the results.${unsaved ? ' Some changes may not have been saved before submission.' : ''}`;
+  $('#score').textContent=`${a.completionReason==='invalidated' ? 'Your teacher invalidated this attempt. ' : a.completionReason==='integrity_limit' ? 'Your attempt was submitted after reaching the integrity-event limit. ' : ''}Your teacher will release the results.${unsaved ? ' Some changes may not have been saved before submission.' : ''}`;
 }
 function palette() {
   const target=$('#palette'); target.replaceChildren();
@@ -124,6 +124,7 @@ function tick() {
 function render(a) {
   submitting=false; moving=false; failed.clear(); versions.clear(); $('#submit').disabled=false; $('#submitTop').disabled=false;
   applyState(a); startMonitoring(); const index=a.questions.findIndex(q=>(q.section?.index ?? 0)===a.currentSection); current=Math.max(0,index);
+  const description=[[a.school,a.subject,a.term].filter(Boolean).join(' · '),a.proctorNotes,a.instructions].filter(Boolean).join('\n\n');$('#examInfoText').textContent=description;$('#examInfoCard').classList.toggle('hidden',!description);
   $('#result').classList.add('hidden'); $('#join').classList.add('hidden'); $('#exam').classList.remove('hidden'); document.body.classList.add('exam-body'); $('#title').textContent=a.title; paint();
   clearInterval(clock); clock=setInterval(tick,1000); tick();
 }
@@ -151,6 +152,9 @@ const retry=document.createElement('button'); retry.type='button'; retry.id='ret
 retry.addEventListener('click',()=>{for(const [id,item] of [...failed]) {failed.delete(id); queueSave(id,item.value,item.version);} status();});
 const discard=document.createElement('button'); discard.type='button'; discard.id='discardSaves'; discard.className='btn btn-ghost btn-sm hidden'; discard.textContent='Discard unsaved answers'; retry.after(discard);
 discard.addEventListener('click',()=>{ if(!confirm('Discard unsaved changes and keep the last saved answers?')) return; for(const id of failed.keys()){ if(confirmed[id] === undefined) delete paper.answers[id]; else paper.answers[id]=confirmed[id]; } failed.clear(); $('#message').classList.add('hidden'); status(); paint(); });
+let infoGeneration=0;
+$('#code').addEventListener('input',()=>{infoGeneration++;$('#entryExamInfo').textContent='';});
+$('#showExamInfo').addEventListener('click',async e=>{const button=e.currentTarget,code=$('#code').value,generation=++infoGeneration;button.disabled=true;try{const info=await api('exam-info',{code});if(generation!==infoGeneration || code!==$('#code').value)return;$('#entryExamInfo').textContent=[info.title,[info.school,info.subject,info.term].filter(Boolean).join(' · '),`${info.duration} minutes · ${info.question_count} questions · ${info.open?'Open':'Closed'}`,info.proctor_notes,info.instructions].filter(Boolean).join('\n');}catch(err){if(generation===infoGeneration)$('#entryExamInfo').textContent=err.message;}finally{button.disabled=false;}});
 $('#resultLookup').addEventListener('submit',async e=>{
   e.preventDefault();const button=e.currentTarget.querySelector('button');button.disabled=true;const output=$('#lookupResult');output.textContent='Checking…';
   try {const r=await api('result-lookup',{code:$('#resultCode').value,number:$('#resultNumber').value,resultKey:$('#resultKeyInput').value});output.textContent=`${r.title}: ${r.score} / ${r.total}${r.pending ? ` (${r.pending} points awaiting grading; score is provisional)` : ''}`;}

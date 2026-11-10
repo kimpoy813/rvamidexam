@@ -1,7 +1,7 @@
 const $ = s => document.querySelector(s);
 let token = sessionStorage.getItem('simple_teacher_token') || '';
 let selected = '', examList = [], resultsGeneration = 0, progressGeneration = 0, progressTimer;
-let currentProgress = null, currentResults = null, feedClearedAt = 0, feedExam = '';
+let currentProgress = null, currentResults = null, feedClearedAt = 0, feedExam = '', integrityGeneration=0, integrityDirty=false, loadedIntegrityExam='', detailsDirty=false, loadedDetailsExam='', detailsRevision='', detailsGeneration=0;
 let editExamId = '', bankRevision = '', bankLocked = false, draftDirty = false, editorGeneration = 0, pasteSource = '', textDirty = false;
 async function api(path, body) {
   const res = await fetch('/api/simple/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { ...(body === undefined ? {} : { 'Content-Type':'application/json' }), ...(token ? { 'X-Teacher-Token': token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -11,6 +11,7 @@ function message(text, bad = false) { const node = $('#message'); node.textConte
 function view(name) {
   $('#overviewView').classList.toggle('hidden', name !== 'overview');
   $('#questionsView').classList.toggle('hidden', name !== 'questions');
+  $('#setupView').classList.toggle('hidden', name !== 'setup');
   $('#results').classList.toggle('hidden', name !== 'results');
   document.querySelectorAll('[data-view]').forEach(tab => tab.setAttribute('aria-selected', String(tab.dataset.view === name)));
 }
@@ -159,7 +160,13 @@ async function exams() {
     button.addEventListener('click', () => { selected = e.id; currentProgress=null; select.value = selected; showSelection(); progress(); view('results'); results().catch(err => message(err.message,true)); });
     const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'btn btn-ghost btn-sm'; toggle.textContent = e.open ? 'Close exam' : 'Open exam';
     toggle.addEventListener('click', async () => { toggle.disabled = true; try { await api(`exams/${encodeURIComponent(e.id)}/open`, { open: !e.open }); await exams(); } catch(err) { message(err.message,true); toggle.disabled = false; } });
-    const actions = document.createElement('div'); actions.className = 'row wrap'; actions.append(button,toggle); row.append(details,actions); container.append(row);
+    const duplicate=document.createElement('button');duplicate.type='button';duplicate.className='btn btn-ghost btn-sm';duplicate.textContent='Duplicate';
+    duplicate.addEventListener('click',async()=>{if((draftDirty || textDirty) && !confirm('Discard unsaved question-bank changes and open the copied exam?'))return;if(integrityDirty && !confirm('Discard unsaved integrity settings?'))return;if(detailsDirty && !confirm('Discard unsaved exam details?'))return;duplicate.disabled=true;const generation=editorGeneration;try{const copy=await api(`exams/${encodeURIComponent(e.id)}/duplicate`,{});if(editorGeneration!==generation){await exams();message('Exam copied as a closed exam. Your newer draft was kept.');return;}selected=copy.id;newDraft();await exams();await Promise.all([loadIntegritySettings(),loadDetails()]);message('Exam copied as a closed exam.');}catch(err){message(err.message,true);duplicate.disabled=false;}});
+    const reset=document.createElement('button');reset.type='button';reset.className='btn btn-danger btn-sm';reset.textContent='Clear attempts';
+    reset.addEventListener('click',async()=>{if(!confirm(`Delete ALL attempts, answers, grades, and result keys for “${e.title}”? Score release will be turned off. This cannot be undone.`)||!confirm('Are you sure? Export results first if you need them.'))return;reset.disabled=true;try{const r=await api(`exams/${encodeURIComponent(e.id)}/reset-attempts`,{});await exams();message(`Deleted ${r.removed} attempt(s). Reload the saved bank to edit it.`);}catch(err){message(err.message,true);reset.disabled=false;}});
+    const remove=document.createElement('button');remove.type='button';remove.className='btn btn-danger btn-sm';remove.textContent='Delete exam';
+    remove.addEventListener('click',async()=>{if(editExamId===e.id && (draftDirty||textDirty) && !confirm('Discard unsaved question-bank changes?'))return;if(!confirm(`Permanently delete “${e.title}” and ALL its attempts and results?`) || !confirm('This cannot be undone. Delete the exam and its data?'))return;remove.disabled=true;const generation=editorGeneration;try{await api(`exams/${encodeURIComponent(e.id)}/delete`,{});if(editExamId===e.id){if(generation===editorGeneration)newDraft();else{editExamId='';bankRevision='';bankLocked=false;draftDirty=true;$('#saveBank').disabled=false;$('#saveBank').textContent='Create exam';$('#bankMode').textContent='The original exam was deleted. Your edited draft can be saved as a new exam.';bankStatus();}}await exams();await Promise.all([loadIntegritySettings(),loadDetails()]);message('Exam deleted.');}catch(err){message(err.message,true);remove.disabled=false;}});
+    const actions = document.createElement('div'); actions.className = 'row wrap'; actions.append(button,toggle,duplicate,reset,remove); row.append(details,actions); container.append(row);
   }
   await results(); await progress();
 }
@@ -176,7 +183,7 @@ async function results() {
   for (const r of data.results) {
     const tr = document.createElement('tr');
     const used=r.submitted_at ? Math.max(0,Math.round((new Date(r.submitted_at)-new Date(r.started_at))/60000)) : null;
-    for (const text of [r.student_name, r.student_no, r.student_class || '—', r.student_section || '—', r.completion_reason==='invalidated' ? 'Invalidated' : r.submitted_at ? (r.pending ? 'Needs grading' : r.completion_reason==='force_submitted' ? 'Teacher submitted' : 'Submitted') : 'In progress', r.submitted_at ? `${r.score} / ${r.total}${r.pending ? ` (${r.pending} pending)` : ''}` : '—', r.submitted_at && !r.pending && r.completion_reason!=='invalidated' && r.total ? `${Math.round(100*r.score/r.total)}%` : '—', used===null?'—':`${used} min`, Math.max(0,(r.integrity_events?.length||0)-(r.integrity_cleared_count||0)), r.submitted_at ? new Date(r.submitted_at).toLocaleString() : '—']) { const td = document.createElement('td'); td.textContent = text; tr.append(td); }
+    for (const text of [r.student_name, r.student_no, r.student_class || '—', r.student_section || '—', r.completion_reason==='invalidated' ? 'Invalidated' : r.submitted_at ? (r.pending ? 'Needs grading' : r.completion_reason==='force_submitted' ? 'Teacher submitted' : r.completion_reason==='integrity_limit' ? 'Integrity limit' : 'Submitted') : 'In progress', r.submitted_at ? `${r.score} / ${r.total}${r.pending ? ` (${r.pending} pending)` : ''}` : '—', r.submitted_at && !r.pending && r.completion_reason!=='invalidated' && r.total ? `${Math.round(100*r.score/r.total)}%` : '—', used===null?'—':`${used} min`, Math.max(0,(r.integrity_events?.length||0)-(r.integrity_cleared_count||0)), r.submitted_at ? new Date(r.submitted_at).toLocaleString() : '—']) { const td = document.createElement('td'); td.textContent = text; tr.append(td); }
     const answerCell = document.createElement('td'); const details = document.createElement('details'); const summary = document.createElement('summary'); summary.textContent = 'View answers and grade'; details.append(summary); const list = document.createElement('ol');
     for (const q of data.questions) {
       const item = document.createElement('li'), answer = r.answers[q.id];
@@ -212,7 +219,7 @@ function actionControls(attempt,examId) {
     button.addEventListener('click',async()=>{
       const questions={extend:`Add ${minutes} minutes to this student's overall deadline? Part timers are not extended.`,force_submit:'Submit the saved answers for this student? Unsaved changes may be lost.',invalidate:'Invalidate this attempt? It will be excluded from score statistics.',reopen:'Reopen this attempt? Saved answers remain, but manual grades are cleared. Existing part locks and part timers remain in effect. The student must check the original result tab.',dismiss_flag:'Clear the current flags? The event history will remain visible.'};
       if(!confirm(questions[action]))return;controls.querySelectorAll('button').forEach(b=>b.disabled=true);
-      try {await api(`exams/${encodeURIComponent(examId)}/action`,{attemptId:attempt.attempt_id,action,...(minutes?{minutes}:{})}); if(selected===examId){await Promise.all([progress(),results()]);}message('Student action saved.');}
+      try {await api(`exams/${encodeURIComponent(examId)}/action`,{attemptId:attempt.attempt_id,action,...(minutes?{minutes}:{})}); await progress();if(selected===examId) await results();message('Student action saved.');}
       catch(err){message(err.message,true);controls.querySelectorAll('button').forEach(b=>b.disabled=false);}
     });controls.append(button);
   }
@@ -237,22 +244,23 @@ function renderAnalytics(data) {
 function renderMonitor(data) {
   const attempts=data.attempts, active=attempts.filter(a=>!a.submitted_at && new Date(a.deadline).getTime()>Date.now());
   $('#onlineKpi').textContent=attempts.filter(a=>a.recently_seen).length; $('#joinedKpi').textContent=attempts.length; $('#submittedKpi').textContent=attempts.filter(a=>a.submitted_at).length;
-  $('#activeKpi').textContent=active.length; $('#progressKpi').textContent=active.length && data.total ? `${Math.round(active.reduce((n,a)=>n+a.answered/data.total,0)/active.length*100)}%` : '0%';
+  $('#activeKpi').textContent=active.length; $('#progressKpi').textContent=active.length ? `${Math.round(active.reduce((n,a)=>n+(a.question_total || data.total ? a.answered/(a.question_total || data.total) : 0),0)/active.length*100)}%` : '0%';
   const final=attempts.filter(a=>a.submitted_at && !a.pending && a.total>0 && a.completion_reason!=='invalidated'); $('#averageKpi').textContent=final.length ? `${Math.round(final.reduce((n,a)=>n+a.score/a.total,0)/final.length*100)}%` : '—';
   $('#needsKpi').textContent=attempts.filter(a=>a.submitted_at && a.pending>0 && a.completion_reason!=='invalidated').length; $('#flagsKpi').textContent=attempts.reduce((n,a)=>n+a.integrity_count,0); $('#rosterCount').textContent=`${attempts.length} joined`;
   const search=$('#rosterSearch').value.trim().toLowerCase(), filter=$('#rosterFilter').value;
   const shown=attempts.filter(a=>{
-    const matches=[a.student_name,a.student_no,a.student_class,a.student_section].some(v=>String(v||'').toLowerCase().includes(search));
+    const matches=[a.student_name,a.student_no,a.student_class,a.student_section,a.exam_title].some(v=>String(v||'').toLowerCase().includes(search));
     return matches && (filter==='all' || filter==='online' && a.recently_seen || filter==='active' && !a.submitted_at && new Date(a.deadline).getTime()>Date.now() || filter==='submitted' && a.submitted_at || filter==='flagged' && a.integrity_count>0 || filter==='manual' && a.submitted_at && a.pending>0 && a.completion_reason!=='invalidated');
   });
   const rows=$('#progressRows');rows.replaceChildren();if(!shown.length) rows.textContent=attempts.length?'No students match this filter.':'No students have joined yet.';
-  for(const a of shown){const row=document.createElement('div');row.className='exam-row';const name=document.createElement('strong');name.textContent=`${a.student_name} (${a.student_no})${a.student_class || a.student_section ? ` · ${[a.student_class,a.student_section].filter(Boolean).join(' / ')}` : ''}`;const status=document.createElement('span');status.className='muted tiny';const state=a.completion_reason==='invalidated'?'Invalidated':a.submitted_at?(a.completion_reason==='force_submitted'?'Teacher submitted':'Submitted'):new Date(a.deadline).getTime()<=Date.now()?'Time expired':'In progress';status.textContent=`${a.answered} / ${data.total} saved · ${state} · ${a.recently_seen?'Recently connected':'No recent heartbeat'} · ${a.integrity_count} integrity event(s)`;row.append(name,status,actionControls(a,selected));rows.append(row);}
-  const events=[]; for(const a of attempts){for(const e of a.integrity_events||[]) events.push({at:e.at,text:`${a.student_name}: ${e.type.replaceAll('_',' ')}`});if(a.submitted_at)events.push({at:a.submitted_at,text:`${a.student_name}: submitted`});}
+  for(const a of shown){const row=document.createElement('div');row.className='exam-row';const name=document.createElement('strong');name.textContent=`${a.student_name} (${a.student_no})${a.student_class || a.student_section ? ` · ${[a.student_class,a.student_section].filter(Boolean).join(' / ')}` : ''}`;const status=document.createElement('span');status.className='muted tiny';const state=a.completion_reason==='invalidated'?'Invalidated':a.submitted_at?(a.completion_reason==='force_submitted'?'Teacher submitted':a.completion_reason==='integrity_limit'?'Integrity limit':'Submitted'):new Date(a.deadline).getTime()<=Date.now()?'Time expired':'In progress';status.textContent=`${a.exam_title ? a.exam_title+' · ' : ''}${a.answered} / ${a.question_total ?? data.total} saved · ${state} · ${a.recently_seen?'Recently connected':'No recent heartbeat'} · ${a.integrity_count} integrity event(s)`;row.append(name,status,actionControls(a,a.exam_id || selected));rows.append(row);}
+  const events=[]; for(const a of attempts){for(const e of a.integrity_events||[]) events.push({at:e.at,text:`${a.student_name}: ${e.type.replaceAll('_',' ')}`});if(a.submitted_at)events.push({at:a.submitted_at,text:`${a.student_name}${a.exam_title ? ` (${a.exam_title})` : ''}: ${a.completion_reason==='integrity_limit' ? 'submitted at integrity limit' : 'submitted'}`});}
   const feed=$('#activityFeed');feed.replaceChildren();const visible=events.filter(e=>new Date(e.at).getTime()>feedClearedAt).sort((a,b)=>new Date(b.at)-new Date(a.at)).slice(0,100);
   if(!visible.length){const empty=document.createElement('div');empty.className='feed-empty';empty.textContent='Integrity events and submissions will appear here as the dashboard refreshes.';feed.append(empty);}
   for(const event of visible){const row=document.createElement('div');row.className='feed-item info';const text=document.createElement('div');text.textContent=event.text;const when=document.createElement('div');when.className='feed-when';when.textContent=new Date(event.at).toLocaleString();text.append(when);row.append(text);feed.append(row);}
 }
 $('#rosterSearch').addEventListener('input',()=>{if(currentProgress)renderMonitor(currentProgress);});
+$('#rosterScope').addEventListener('change',()=>{currentProgress=null;feedExam='';progress();});
 $('#rosterFilter').addEventListener('change',()=>{if(currentProgress)renderMonitor(currentProgress);});
 $('#clearFeed').addEventListener('click',()=>{feedClearedAt=Date.now();if(currentProgress)renderMonitor(currentProgress);});
 function csvCell(value){ const text=String(value ?? ''); const safe=/^[\s\u0000-\u001f]*[=+@-]/.test(text) ? "'"+text : text;return `"${safe.replaceAll('"','""')}"`; }
@@ -266,37 +274,78 @@ $('#releaseResults').addEventListener('click',async e=>{
 });
 $('#exportCsv').addEventListener('click',()=>{
   if(!currentResults) return message('Select an exam and wait for results to load.',true);
-  const rows=[['Student','Student number','Class','Section','Status','Score','Total','Pending points','Integrity events','Started','Submitted']];
-  for(const r of currentResults.results) rows.push([r.student_name,r.student_no,r.student_class,r.student_section,r.completion_reason==='invalidated' ? 'Invalidated' : r.submitted_at ? r.pending?'Needs grading':r.completion_reason==='force_submitted'?'Teacher submitted':'Submitted' : 'In progress',r.submitted_at?r.score:'',r.submitted_at?r.total:'',r.submitted_at?r.pending:'',Math.max(0,(r.integrity_events?.length||0)-(r.integrity_cleared_count||0)),r.started_at,r.submitted_at]);
+  const questions=currentResults.questions;
+  const rows=[['Student','Student number','Class','Section','Status','Score','Total','Percent','Pending points','Integrity events','Started','Submitted','Minutes used',...questions.map((q,i)=>`Answer ${i+1}: ${q.prompt}`)]];
+  for(const r of currentResults.results) {
+    const answerText=q=>{const value=r.answers[q.id];if(Array.isArray(value))return value.map(v=>Number.isInteger(v)?q.choices[v]??'':String(v)).join(', ');return Number.isInteger(value)?q.choices[value]??'':value ?? '';};
+    const status=r.completion_reason==='invalidated'?'Invalidated':r.submitted_at?r.pending?'Needs grading':r.completion_reason==='force_submitted'?'Teacher submitted':r.completion_reason==='integrity_limit'?'Integrity limit':'Submitted':'In progress';
+    rows.push([r.student_name,r.student_no,r.student_class,r.student_section,status,r.submitted_at?r.score:'',r.submitted_at?r.total:'',r.submitted_at && !r.pending && r.completion_reason!=='invalidated' && r.total ? Math.round(r.score/r.total*100) : '',r.submitted_at?r.pending:'',Math.max(0,(r.integrity_events?.length||0)-(r.integrity_cleared_count||0)),r.started_at,r.submitted_at,r.submitted_at?Math.max(0,Math.round((new Date(r.submitted_at)-new Date(r.started_at))/60000)):'',...questions.map(answerText)]);
+  }
   const csv='\ufeff'+rows.map(row=>row.map(csvCell).join(',')).join('\r\n');const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='exam-results.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 async function progress() {
-  const examId = selected, generation = ++progressGeneration;
+  const examId = selected, scope=$('#rosterScope').value, generation = ++progressGeneration;
   if (!examId) { currentProgress=null; $('#progressRows').textContent = 'Select an exam.'; $('#activityFeed').replaceChildren(); return; }
   try {
-    const data = await api(`exams/${encodeURIComponent(examId)}/progress`);
-    if (generation !== progressGeneration || examId !== selected || !token) return;
-    currentProgress=data; if(feedExam!==examId){feedExam=examId;feedClearedAt=0;} renderMonitor(data);
+    const data = scope==='all' ? await api('progress-all') : await api(`exams/${encodeURIComponent(examId)}/progress`);
+    if (generation !== progressGeneration || examId !== selected || scope!==$('#rosterScope').value || !token) return;
+    const feedScope=scope==='all'?'all':examId; currentProgress=data; if(feedExam!==feedScope){feedExam=feedScope;feedClearedAt=0;} renderMonitor(data);
     $('#progressStatus').textContent = 'Refreshes every 10 seconds. Recent connection is based on a heartbeat, not proof of attention; offline events may not be recorded. See Results for event details.';
   } catch (err) {
     if (generation === progressGeneration && examId === selected && token) $('#progressStatus').textContent = `Could not refresh progress: ${err.message}`;
   }
 }
 async function showDashboard() { const me = await api('me'); $('#auth').classList.add('hidden'); $('#dashboard').classList.remove('hidden'); $('#welcome').textContent = `Teacher dashboard · ${me.username}`; await exams(); await progress(); clearInterval(progressTimer); progressTimer = setInterval(() => { if (!document.hidden) progress(); }, 10000); }
+const detailFields={school:'#detailSchool',subject:'#detailSubject',term:'#detailTerm',instructions:'#detailInstructions',proctor_notes:'#detailNotes'};
+function detailValues(){return Object.fromEntries(Object.entries(detailFields).map(([key,selector])=>[key,$(selector).value]));}
+async function loadDetails(force=false) {
+  const examId=selected;if(!force && detailsDirty && loadedDetailsExam===examId)return;
+  if(force && detailsDirty && !confirm('Discard unsaved exam details and reload?'))return;
+  const generation=++detailsGeneration;detailsDirty=false;loadedDetailsExam=examId;detailsRevision='';for(const selector of Object.values(detailFields))$(selector).disabled=true;$('#saveDetails').disabled=true;$('#regenerateCode').disabled=true;$('#detailsStatus').textContent=examId?'Loading details…':'Select an exam.';
+  if(!examId)return;
+  try{const data=await api(`exams/${encodeURIComponent(examId)}/details`);if(generation!==detailsGeneration || selected!==examId)return;for(const [key,selector] of Object.entries(detailFields)){$(selector).value=data[key];$(selector).disabled=false;}detailsRevision=data.revision;$('#detailsStatus').textContent='Details loaded for selected exam.';$('#saveDetails').disabled=false;$('#regenerateCode').disabled=false;}
+  catch(err){if(generation===detailsGeneration)$('#detailsStatus').textContent=err.message;}
+}
+$('#detailsForm').addEventListener('input',()=>{detailsDirty=true;$('#detailsStatus').textContent='Unsaved exam details.';});
+$('#detailsForm').addEventListener('submit',async e=>{e.preventDefault();const examId=selected,button=$('#saveDetails'),values=detailValues(),revision=detailsRevision;if(!examId||!revision)return;button.disabled=true;
+  try{const data=await api(`exams/${encodeURIComponent(examId)}/details`,{...values,revision});if(examId===selected && revision===detailsRevision){detailsRevision=data.revision;detailsDirty=JSON.stringify(detailValues())!==JSON.stringify(values);$('#detailsStatus').textContent=detailsDirty?'Earlier values saved; newer changes are not saved.':'Exam details saved.';}message('Exam details saved.');}
+  catch(err){if(examId===selected)$('#detailsStatus').textContent=err.message;message(err.message,true);}finally{if(examId===selected)button.disabled=false;}
+});
+$('#reloadDetails').addEventListener('click',()=>loadDetails(true));
+$('#regenerateCode').addEventListener('click',async e=>{const examId=selected,button=e.currentTarget;if(!examId || !confirm('Generate a new code? The old code will no longer work for joining or checking results. Share the new code with students.'))return;button.disabled=true;
+  try{const data=await api(`exams/${encodeURIComponent(examId)}/new-code`,{});await exams();message(`New access code: ${data.code}`);}catch(err){message(err.message,true);}finally{if(examId===selected)button.disabled=false;}
+});
+async function loadIntegritySettings() {
+  const examId=selected;if(integrityDirty && loadedIntegrityExam===examId)return;const generation=++integrityGeneration;integrityDirty=false;loadedIntegrityExam=examId;$('#maxViolations').disabled=true;$('#autoSubmitViolations').disabled=true;$('#saveIntegrity').disabled=true;$('#integrityStatus').textContent=examId?'Loading settings…':'Select an exam to configure the limit.';
+  if(!examId)return;
+  try {const settings=await api(`exams/${encodeURIComponent(examId)}/integrity-settings`);if(generation!==integrityGeneration || examId!==selected)return;$('#maxViolations').value=settings.max_violations;$('#autoSubmitViolations').checked=settings.auto_submit_on_violations;$('#maxViolations').disabled=false;$('#autoSubmitViolations').disabled=false;$('#integrityStatus').textContent='Settings loaded for the selected exam.';$('#saveIntegrity').disabled=false;}
+  catch(err){if(generation===integrityGeneration)$('#integrityStatus').textContent=err.message;}
+}
+$('#integritySettings').addEventListener('input',()=>{integrityDirty=true;});
+$('#integritySettings').addEventListener('submit',async e=>{e.preventDefault();const examId=selected,button=$('#saveIntegrity'),maxViolations=Number($('#maxViolations').value),autoSubmit=$('#autoSubmitViolations').checked;
+  if(!examId || !Number.isInteger(maxViolations) || maxViolations<0 || maxViolations>500 || (autoSubmit && !maxViolations))return message('Choose a limit from 1 to 500 for auto-submit, or 0 to disable the limit.',true);
+  if(autoSubmit && !confirm('Enable auto-submit when the integrity limit is reached? Browser checks can be unreliable, and unsaved answers may be lost.'))return;
+  button.disabled=true;try{await api(`exams/${encodeURIComponent(examId)}/integrity-settings`,{maxViolations,autoSubmit});if(examId===selected){integrityDirty=Number($('#maxViolations').value)!==maxViolations || $('#autoSubmitViolations').checked!==autoSubmit;$('#integrityStatus').textContent=integrityDirty?'Saved earlier values; newer changes are not saved.':'Integrity settings saved.';}message('Integrity settings saved.');}catch(err){message(err.message,true);}finally{if(examId===selected)button.disabled=false;}
+});
+$('#setupNewExam').addEventListener('click',()=>$('#newExam').click());
+$('#changePassword').addEventListener('submit',async e=>{e.preventDefault();const button=e.currentTarget.querySelector('button');button.disabled=true;try{await api('password',{current:$('#currentPassword').value,next:$('#nextPassword').value});$('#currentPassword').value='';$('#nextPassword').value='';message('Password changed. Other teacher sessions were signed out.');}catch(err){message(err.message,true);}finally{button.disabled=false;}});
 $('#login').addEventListener('submit', async e => { e.preventDefault(); const b = e.currentTarget.querySelector('[type=submit]'); b.disabled = true; try { const r = await api('login', { username:$('#username').value.trim(), password:$('#password').value }); token = r.token; sessionStorage.setItem('simple_teacher_token',token); $('#password').value = ''; await showDashboard(); message('Signed in.'); } catch(err) { message(err.message,true); } finally { b.disabled = false; } });
 $('#register').addEventListener('click', async e => { const button = e.currentTarget; button.disabled = true; try { await api('register', { username:$('#username').value.trim(), password:$('#password').value }); message('Account created. Please sign in.'); } catch(err) { message(err.message,true); } finally { button.disabled = false; } });
 $('#logout').addEventListener('click', async () => { try { await api('logout', {}); } catch {} sessionStorage.removeItem('simple_teacher_token'); token = ''; selected = ''; currentProgress=null; currentResults=null; resultsGeneration++; progressGeneration++; clearInterval(progressTimer); newDraft(); $('#importText').value = ''; $('#importPreview').replaceChildren(); $('#dashboard').classList.add('hidden'); $('#auth').classList.remove('hidden'); message('Signed out.'); });
 $('#examSelect').addEventListener('change', e => {
   const editing=!$('#questionsView').classList.contains('hidden');
+  if(!$('#setupView').classList.contains('hidden') && detailsDirty && !confirm('Discard unsaved exam details and switch exams?')){e.target.value=selected;return;}
+  if(!$('#setupView').classList.contains('hidden') && integrityDirty && !confirm('Discard unsaved integrity settings and switch exams?')){e.target.value=selected;return;}
   if(editing && (draftDirty || textDirty) && !confirm('Discard unsaved question-bank changes and switch exams?')) { e.target.value=selected; return; }
   currentProgress=null; $('#progressRows').textContent='Loading saved progress…'; $('#activityFeed').replaceChildren(); selected=e.target.value; editorGeneration++; showSelection(); $('#progressRows').textContent='Loading saved progress…'; progress(); results().catch(err=>message(err.message,true));
+  if(!$('#setupView').classList.contains('hidden')) {loadIntegritySettings();loadDetails();}
   if(editing && selected) loadBank({confirmed:true}).catch(err=>message(err.message,true));
 });
 $('#newExam').addEventListener('click', () => { if ((draftDirty || textDirty) && !confirm('Discard unsaved pasted text and question edits and start a new exam?')) return; newDraft(); view('questions'); });
 $('#loadBank').addEventListener('click', () => loadBank().catch(err => message(err.message,true)));
 $('#showFormat').addEventListener('click', () => $('#formatHelp').classList.toggle('hidden'));
 $('#create').addEventListener('input', () => { dirty(); counts(); }); $('#create').addEventListener('change', () => { dirty(); counts(); });
-document.querySelectorAll('[data-view]').forEach(tab => tab.addEventListener('click', () => { view(tab.dataset.view); if (tab.dataset.view === 'overview') progress(); if (tab.dataset.view === 'results') results().catch(err => message(err.message,true)); if (tab.dataset.view === 'questions' && selected && selected !== editExamId) loadBank().catch(err => message(err.message,true)); }));
+document.querySelectorAll('[data-view]').forEach(tab => tab.addEventListener('click', () => { view(tab.dataset.view); if (tab.dataset.view === 'setup') {loadIntegritySettings();loadDetails();} if (tab.dataset.view === 'overview') progress(); if (tab.dataset.view === 'results') results().catch(err => message(err.message,true)); if (tab.dataset.view === 'questions' && selected && selected !== editExamId) loadBank().catch(err => message(err.message,true)); }));
 $('#refreshExams').addEventListener('click', () => exams().catch(err => message(err.message,true)));
 $('#addQuestion').addEventListener('click', () => { editor(); dirty(); });
 $('#addPart').addEventListener('click', () => { const p=part(); editor(null,p); dirty(); }); $('#refreshResults').addEventListener('click', () => results().catch(err => message(err.message,true)));
