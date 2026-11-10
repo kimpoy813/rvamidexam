@@ -9,7 +9,7 @@ test('server enforces part locks and deadlines and shuffles papers deterministic
   const schema='test_'+crypto.randomBytes(8).toString('hex'),admin=new pg.Client({connectionString:url});await admin.connect();await admin.query(`CREATE SCHEMA "${schema}"`);
   const conn=new URL(url);conn.searchParams.set('options',`-csearch_path=${schema}`);process.env.DATABASE_URL=conn.toString();
   const {default:handler,closeTestPool}=await import('../api/handler.js');const server=http.createServer(handler);server.listen(0,'127.0.0.1');await once(server,'listening');const base=`http://127.0.0.1:${server.address().port}/api/simple/`;
-  const call=async(path,body,teacher,student)=>{const r=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...(teacher?{'X-Teacher-Token':teacher}:{}),...(student?{'X-Exam-Token':student}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});return {status:r.status,data:await r.json()};};
+  const call=async(path,body,teacher,student)=>{const r=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...(teacher?{'X-Teacher-Token':teacher}:{}),...(student?{'X-Exam-Token':student}:{})},...(body===undefined?{}:{body:JSON.stringify(path === 'join' ? {studentClass:'Grade 10',studentSection:'A',...body} : body)})});return {status:r.status,data:await r.json()};};
   try {
     await call('register',{username:'timing_teacher',password:'long-strong-password'});const teacher=(await call('login',{username:'timing_teacher',password:'long-strong-password'})).data.token;
     const question=n=>({kind:'mcq',prompt:`Question ${n}`,points:1,choices:['A','B','C','D'],answer:'B',shuffle:true});
@@ -34,7 +34,7 @@ test('server enforces part locks and deadlines and shuffles papers deterministic
     assert.equal((await call('attempt/navigate',{section:2},undefined,token)).status,200);
     assert.equal((await call('attempt/navigate',{section:1},undefined,token)).status,403);
     assert.equal((await call('attempt/answer',{questionId:q2.id,answer:1},undefined,token)).status,200);
-    const submitted=await call('attempt/submit',{},undefined,token);assert.equal(submitted.data.score,2);assert.equal(submitted.data.total,7);
+    const submitted=await call('attempt/submit',{},undefined,token);assert.equal(submitted.data.submitted,true);assert.equal('score' in submitted.data,false);
     const unlocked=(await call('exams',{title:'Timer only',duration:10,sections,lock_sections:false,shuffle_questions:false,shuffle_choices:false},teacher)).data;
     const other=(await call('join',{code:unlocked.code,name:'Student Two',number:'002'})).data.token,otherDigest=crypto.createHash('sha256').update(other).digest('hex');
     const timed=(await call('attempt',undefined,undefined,other)).data;const initialDeadline=timed.sectionDeadline;

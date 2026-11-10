@@ -32,10 +32,31 @@ function record(q, value, debounce=false) {
   if(debounce) item.timer=setTimeout(()=>flush(q.id),500); else flush(q.id);
   $('#message').classList.add('hidden'); status(); palette();
 }
+// Browser events are best-effort signals, not proof of cheating. They do not
+// detect another browser profile or physical device with different credentials.
+let monitoring=false, tabChannel=null, tabPing=null, lastSecondTab=0;
+function flag(type) {
+  api('attempt/integrity',{type}).catch(()=>error('An integrity event could not be recorded. Check your connection and notify your teacher.'));
+}
+for (const type of ['copy','cut','paste']) document.addEventListener(type,e=>{
+  if(!monitoring) return;
+  e.preventDefault(); flag(type); error(`${type[0].toUpperCase()+type.slice(1)} is not allowed during the exam.`);
+},true);
+function startMonitoring() {
+  if(monitoring) return;
+  monitoring=true;
+  if(typeof window.BroadcastChannel !== 'function') return;
+  tabChannel=new window.BroadcastChannel(`simple-exam-${token}`);
+  const report=()=>{ if(Date.now()-lastSecondTab<10000) return; lastSecondTab=Date.now();flag('second_tab');error('This exam is open in another tab or window. Close the other copy.'); };
+  tabChannel.onmessage=e=>{ if(e.data==='hello'){report();tabChannel?.postMessage('present');} else if(e.data==='present') report(); };
+  tabChannel.postMessage('hello');
+  tabPing=setInterval(()=>tabChannel?.postMessage('hello'),5000);
+}
+function stopMonitoring() { monitoring=false;clearInterval(tabPing);tabPing=null;tabChannel?.close();tabChannel=null; }
 function showResult(a) {
-  clearInterval(clock); for (const item of scheduled.values()) clearTimeout(item.timer); scheduled.clear();
+  stopMonitoring(); clearInterval(clock); for (const item of scheduled.values()) clearTimeout(item.timer); scheduled.clear();
   $('#exam').classList.add('hidden'); $('#join').classList.add('hidden'); $('#result').classList.remove('hidden');
-  $('#score').textContent=`Score: ${a.score} / ${a.total}${a.pending ? ` (${a.pending} points awaiting teacher grading)` : ''}${failed.size ? ' Some answers could not be saved before submission.' : ''}`;
+  $('#score').textContent=`Your teacher will release the results.${failed.size ? ' Some answers could not be saved before submission.' : ''}`;
   sessionStorage.removeItem('simple_exam_token');
 }
 function palette() {
@@ -80,7 +101,7 @@ function tick() {
   if(!seconds && !moving){clearInterval(clock);finish(true);}
 }
 function render(a) {
-  applyState(a); const index=a.questions.findIndex(q=>(q.section?.index ?? 0)===a.currentSection); current=Math.max(0,index);
+  applyState(a); startMonitoring(); const index=a.questions.findIndex(q=>(q.section?.index ?? 0)===a.currentSection); current=Math.max(0,index);
   $('#join').classList.add('hidden'); $('#exam').classList.remove('hidden'); document.body.classList.add('exam-body'); $('#title').textContent=a.title; paint();
   clearInterval(clock); clock=setInterval(tick,1000); tick();
 }
@@ -111,6 +132,6 @@ discard.addEventListener('click',()=>{ if(!confirm('Discard unsaved changes and 
 $('#prev').addEventListener('click',()=>go(current-1));
 $('#next').addEventListener('click',()=>go(current+1));
 $('#submit').addEventListener('click',()=>finish()); $('#submitTop').addEventListener('click',()=>finish());
-$('#joinForm').addEventListener('submit',async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');b.disabled=true;$('#message').classList.add('hidden');try {const r=await api('join',{code:$('#code').value,name:$('#name').value,number:$('#number').value});token=r.token;sessionStorage.setItem('simple_exam_token',token);await load();} catch(e){error(e.message);} finally {b.disabled=false;}});
+$('#joinForm').addEventListener('submit',async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');b.disabled=true;$('#message').classList.add('hidden');try {const r=await api('join',{code:$('#code').value,name:$('#name').value,number:$('#number').value,studentClass:$('#studentClass').value,studentSection:$('#studentSection').value});token=r.token;sessionStorage.setItem('simple_exam_token',token);await load();} catch(e){error(e.message);} finally {b.disabled=false;}});
 window.addEventListener('beforeunload', e => { if (scheduled.size || pending || failed.size) { e.preventDefault(); e.returnValue = ''; } });
 if(token) load().catch(e=>error(e.message));
