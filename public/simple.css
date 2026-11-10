@@ -66,3 +66,7 @@
 .neon-roster-status { display:grid; gap:4px; }
 @media (max-width:1020px) { .neon-roster-row { grid-template-columns:42px minmax(0,1fr) auto; } .neon-roster-row .progress-cell, .neon-roster-row .teacher-actions { grid-column:2 / -1; } }
 @media (max-width:640px) { .neon-roster-row { gap:8px; padding:12px; } .neon-roster-time { grid-column:2; } .neon-roster-status { grid-column:2 / -1; } }
+.neon-roster-row .roster-events { grid-column:2 / -1; font-size:12px; color:var(--muted); }
+.roster-events summary { cursor:pointer; color:var(--brand-dark); font-weight:650; }
+.roster-events ul { margin:8px 0 0; padding-left:18px; }
+.roster-events li { padding:3px 0; }

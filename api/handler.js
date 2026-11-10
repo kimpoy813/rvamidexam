@@ -56,6 +56,15 @@ async function initialize() {
         ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS student_class TEXT;
         ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS student_section TEXT;
         ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS integrity_events JSONB NOT NULL DEFAULT '[]'::jsonb;
+        ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS integrity_total INTEGER;
+        ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS integrity_cleared_total INTEGER;
+        UPDATE simple_attempts SET integrity_total=jsonb_array_length(integrity_events) WHERE integrity_total IS NULL;
+        UPDATE simple_attempts SET integrity_cleared_total=LEAST(integrity_cleared_count,integrity_total) WHERE integrity_cleared_total IS NULL;
+        ALTER TABLE simple_attempts ALTER COLUMN integrity_total SET DEFAULT 0;
+        ALTER TABLE simple_attempts ALTER COLUMN integrity_total SET NOT NULL;
+        ALTER TABLE simple_attempts ALTER COLUMN integrity_cleared_total SET DEFAULT 0;
+        ALTER TABLE simple_attempts ALTER COLUMN integrity_cleared_total SET NOT NULL;
+        CREATE TABLE IF NOT EXISTS simple_integrity_receipts (attempt_hash TEXT NOT NULL REFERENCES simple_attempts(token_hash) ON DELETE CASCADE, event_id TEXT NOT NULL, PRIMARY KEY(attempt_hash,event_id));
         CREATE INDEX IF NOT EXISTS simple_attempts_exam ON simple_attempts(exam_id);
         CREATE TABLE IF NOT EXISTS simple_auth_limits (key TEXT PRIMARY KEY, window_start TIMESTAMPTZ NOT NULL, attempts INTEGER NOT NULL);
       `);
@@ -170,6 +179,18 @@ async function lockAttempt(client, token) {
   if (!r.rows[0]) throw fail(404, 'Attempt not found.');
   const clock = await client.query('SELECT clock_timestamp() AS server_now');
   return { ...r.rows[0], server_now:clock.rows[0].server_now };
+}
+// Attempt rows are locked before calling this helper. Receipts make retried
+// browser events idempotent, while the recent display history stays bounded.
+async function recordIntegrity(client, attemptHash, type, eventId=null) {
+  if(eventId) {
+    const receipt=await client.query('INSERT INTO simple_integrity_receipts(attempt_hash,event_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING event_id',[attemptHash,eventId]);
+    if(!receipt.rows.length) return {recorded:false};
+  }
+  const result=await client.query(`UPDATE simple_attempts SET integrity_total=integrity_total+1,
+    integrity_events=(CASE WHEN jsonb_array_length(integrity_events)>=500 THEN integrity_events-0 ELSE integrity_events END) || jsonb_build_array(jsonb_build_object('type',$2::text,'at',clock_timestamp()))
+    WHERE token_hash=$1 RETURNING GREATEST(integrity_total-integrity_cleared_total,0) AS n`,[attemptHash,type]);
+  return {recorded:true,count:result.rows[0].n};
 }
 async function finalize(client, a) {
   if (a.submitted_at) return a;
@@ -340,7 +361,7 @@ export default async function handler(req, res) {
       const t=await teacher(req);
       const r=await query(`SELECT a.token_hash AS attempt_id,a.student_name,a.student_no,a.student_class,a.student_section,a.started_at,a.submitted_at,a.deadline,a.last_seen_at,a.score,a.total,a.pending,a.integrity_events,a.completion_reason,a.teacher_actions,e.id AS exam_id,e.title AS exam_title,jsonb_array_length(e.questions) AS question_total,
         (a.last_seen_at > clock_timestamp() - interval '35 seconds' AND a.submitted_at IS NULL AND a.deadline > clock_timestamp()) AS recently_seen,
-        GREATEST(jsonb_array_length(a.integrity_events)-a.integrity_cleared_count,0) AS integrity_count,
+        GREATEST(a.integrity_total-a.integrity_cleared_total,0) AS integrity_count,
         (SELECT count(*)::int FROM jsonb_each(a.answers) item WHERE item.value <> '""'::jsonb AND item.value <> '[]'::jsonb AND item.value <> 'null'::jsonb) AS answered
         FROM simple_attempts a JOIN simple_exams e ON e.id=a.exam_id WHERE e.teacher_id=$1 ORDER BY a.started_at DESC`,[t.id]);
       return send(res,200,{attempts:r.rows});
@@ -352,7 +373,7 @@ export default async function handler(req, res) {
       const exam = await query('SELECT id, jsonb_array_length(questions) AS total FROM simple_exams WHERE id=$1 AND teacher_id=$2', [progressMatch[1], t.id]);
       if (!exam.rows[0]) throw fail(404, 'Exam not found.');
       const r = await query(`SELECT student_name, student_no, student_class, student_section, token_hash AS attempt_id, started_at, submitted_at, deadline, last_seen_at, score, total, pending, integrity_events, completion_reason, teacher_actions,
-        (last_seen_at > clock_timestamp() - interval '35 seconds' AND submitted_at IS NULL AND deadline > clock_timestamp()) AS recently_seen, GREATEST(jsonb_array_length(integrity_events)-integrity_cleared_count,0) AS integrity_count,
+        (last_seen_at > clock_timestamp() - interval '35 seconds' AND submitted_at IS NULL AND deadline > clock_timestamp()) AS recently_seen, GREATEST(integrity_total-integrity_cleared_total,0) AS integrity_count,
         (SELECT count(*)::int FROM jsonb_each(answers) item WHERE item.value <> '""'::jsonb AND item.value <> '[]'::jsonb AND item.value <> 'null'::jsonb) AS answered
         FROM simple_attempts WHERE exam_id=$1 ORDER BY started_at DESC`, [progressMatch[1]]);
       return send(res, 200, { total: exam.rows[0].total, attempts: r.rows });
@@ -364,7 +385,7 @@ export default async function handler(req, res) {
         const expired = await c.query('SELECT * FROM simple_attempts WHERE exam_id=$1 AND submitted_at IS NULL AND deadline <= now() FOR UPDATE', [resultMatch[1]]);
         for (const row of expired.rows) await finalize(c, { ...row, questions:exam.rows[0].questions });
       });
-      const r = await query('SELECT token_hash AS attempt_id,student_name,student_no,student_class,student_section,started_at,submitted_at,score,total,pending,answers,manual_scores,integrity_events,integrity_cleared_count,completion_reason,teacher_actions FROM simple_attempts WHERE exam_id=$1 ORDER BY started_at DESC', [resultMatch[1]]);
+      const r = await query('SELECT token_hash AS attempt_id,student_name,student_no,student_class,student_section,started_at,submitted_at,score,total,pending,answers,manual_scores,integrity_events,integrity_cleared_count,integrity_total,integrity_cleared_total,completion_reason,teacher_actions FROM simple_attempts WHERE exam_id=$1 ORDER BY started_at DESC', [resultMatch[1]]);
       const submitted=r.rows.filter(row=>row.submitted_at && row.completion_reason !== 'invalidated');
       const analysis=exam.rows[0].questions.map((q,index)=>{
         let answered=0, correct=0, assessed=0, awaiting=0;
@@ -428,7 +449,7 @@ export default async function handler(req, res) {
           if(clash.rows.length) throw fail(409,'Another attempt for this student is active.');
           const q=await c.query("UPDATE simple_attempts SET submitted_at=NULL,completion_reason=NULL,score=NULL,total=NULL,pending=0,manual_scores='{}'::jsonb,last_seen_at=NULL,deadline=GREATEST(clock_timestamp()+interval '1 minute',started_at+($2 * interval '1 minute')) WHERE token_hash=$1 RETURNING deadline",[a.token_hash,exam.rows[0].duration]); a.deadline=q.rows[0].deadline;
         } else {
-          await c.query('UPDATE simple_attempts SET integrity_cleared_count=jsonb_array_length(integrity_events) WHERE token_hash=$1',[a.token_hash]);
+          await c.query('UPDATE simple_attempts SET integrity_cleared_count=jsonb_array_length(integrity_events),integrity_cleared_total=integrity_total WHERE token_hash=$1',[a.token_hash]);
         }
         await c.query(`UPDATE simple_attempts SET teacher_actions=(teacher_actions || jsonb_build_array(jsonb_build_object('action',$2::text,'minutes',$3::int,'at',clock_timestamp()))) WHERE token_hash=$1 AND jsonb_array_length(teacher_actions)<500`,[a.token_hash,b.action,b.action==='extend'?b.minutes:null]);
         return {ok:true,deadline:a.deadline};
@@ -462,8 +483,8 @@ export default async function handler(req, res) {
         if (!exam.rows[0]) throw fail(404, 'Exam not found or closed.');
         const existing=await c.query("SELECT * FROM simple_attempts WHERE exam_id=$1 AND lower(trim(student_no))=lower(trim($2)) AND submitted_at IS NULL AND deadline > clock_timestamp() ORDER BY started_at DESC LIMIT 1 FOR UPDATE",[exam.rows[0].id,no]);
         if(existing.rows.length) {
-          const event=await c.query(`UPDATE simple_attempts SET integrity_events=integrity_events || jsonb_build_array(jsonb_build_object('type','duplicate_join','at',clock_timestamp())) WHERE token_hash=$1 AND jsonb_array_length(integrity_events)<500 RETURNING GREATEST(jsonb_array_length(integrity_events)-integrity_cleared_count,0) AS n`,[existing.rows[0].token_hash]);
-          if(event.rows.length && exam.rows[0].auto_submit_on_violations && exam.rows[0].max_violations>0 && event.rows[0].n>=exam.rows[0].max_violations){
+          const event=await recordIntegrity(c,existing.rows[0].token_hash,'duplicate_join');
+          if(event.recorded && exam.rows[0].auto_submit_on_violations && exam.rows[0].max_violations>0 && event.count>=exam.rows[0].max_violations){
             await finalize(c,{...existing.rows[0],questions:exam.rows[0].questions});await c.query("UPDATE simple_attempts SET completion_reason='integrity_limit' WHERE token_hash=$1",[existing.rows[0].token_hash]);
           }
           return true;
@@ -487,14 +508,14 @@ export default async function handler(req, res) {
           return {submitted:!!a.submitted_at,deadline:a.deadline,serverTime:a.server_now};
         }
         if (action === 'integrity') {
-          if (!['copy','cut','paste','second_tab','tab_hidden'].includes(b.type)) throw fail(400,'Invalid integrity event.');
-          if (!a.submitted_at) {
-            const event=await c.query(`UPDATE simple_attempts SET integrity_events=integrity_events || jsonb_build_array(jsonb_build_object('type',$2::text,'at',clock_timestamp())) WHERE token_hash=$1 AND jsonb_array_length(integrity_events)<500 RETURNING GREATEST(jsonb_array_length(integrity_events)-integrity_cleared_count,0) AS n`,[a.token_hash,b.type]);
-            if(event.rows.length && a.auto_submit_on_violations && a.max_violations>0 && event.rows[0].n>=a.max_violations){
-              a=await finalize(c,a);await c.query("UPDATE simple_attempts SET completion_reason='integrity_limit' WHERE token_hash=$1",[a.token_hash]);
-            }
+          if (!['copy','cut','paste','second_tab','tab_hidden'].includes(b.type) || (b.eventId!==undefined && !/^[A-Za-z0-9_-]{22}$/.test(b.eventId))) throw fail(400,'Invalid integrity event.');
+          // Retry-capable events may arrive after submission due to network loss.
+          if(a.submitted_at && !b.eventId) throw fail(409,'This attempt is already submitted.');
+          const event=await recordIntegrity(c,a.token_hash,b.type,b.eventId || null);
+          if(event.recorded && !a.submitted_at && a.auto_submit_on_violations && a.max_violations>0 && event.count>=a.max_violations){
+            a=await finalize(c,a);await c.query("UPDATE simple_attempts SET completion_reason='integrity_limit' WHERE token_hash=$1",[a.token_hash]);
           }
-          return {ok:true,submitted:!!a.submitted_at};
+          return {ok:true,recorded:event.recorded,submitted:!!a.submitted_at};
         }
         if (action === 'answer') {
           if (a.submitted_at) return { answerClosed:true };
