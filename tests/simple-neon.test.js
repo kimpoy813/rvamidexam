@@ -82,6 +82,10 @@ test('serverless exam workflow survives concurrent saves and isolates teachers',
     const attempts = await Promise.all(joined.map(x=>call('attempt',undefined,undefined,x.data.token)));
     assert.ok(attempts.every(x=>x.status===200));
     assert.ok(attempts.every(x=>!JSON.stringify(x.data.questions).includes('"answer"')));
+    const firstQuestion=attempts[0].data.questions[1];assert.equal((await call('attempt/heartbeat',{questionId:'not-a-question'},undefined,joined[0].data.token)).status,400);assert.equal((await call('attempt/heartbeat',{questionId:firstQuestion.id},undefined,joined[0].data.token)).status,200);
+    const positions=(await call(`exams/${exam.id}/progress`,undefined,teacher)).data.attempts;const position=positions.find(a=>a.student_no==='N-0');assert.equal(position.current_question,2);assert.equal(position.current_part,'Part 1');assert.equal('questions' in position,false);
+    const allPositions=(await call('progress-all',undefined,teacher)).data.attempts;assert.equal(allPositions.find(a=>a.student_no==='N-0').current_question,2);assert.equal('questions' in allPositions[0],false);
+
     const saves = await Promise.all(joined.flatMap((entry,i)=>attempts[i].data.questions.map((q,n)=>call('attempt/answer',{questionId:q.id,answer:n===0 ? 1:0},undefined,entry.data.token))));
     assert.ok(saves.every(x=>x.status===200), JSON.stringify(saves.find(x=>x.status!==200)));
     const progress = await call(`exams/${exam.id}/progress`, undefined, teacher);

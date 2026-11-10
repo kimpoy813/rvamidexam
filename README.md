@@ -449,7 +449,7 @@ Existing multiple-choice exams and results use the same `simple_*` tables.
 This is **not full parity** with the original app: SQLite data migration and
 some proctoring and other settings are not implemented. Each part must contain
 a question. The live monitor shows recent heartbeats, searchable and filterable students,
-integrity counts, and a polling-based activity feed. Results include a score
+integrity counts, last-reported question and part, and a polling-based activity feed. Students also have a part navigator, progress ring, and keyboard shortcuts. On smaller screens, the question map and part navigator open from a compact progress control; the save status and submit action remain available at the bottom. Results include a score
 distribution, item analysis, and CSV export. Statistics exclude provisional
 scores and use assessed, answered items for correctness rates. A
 heartbeat is not proof a student is attentive, and connectivity gaps are not
@@ -468,8 +468,7 @@ teacher if they lose the original tab. Copy/cut/paste are blocked in the exam
 page and logged; leaving the exam tab is recorded and shows a warning; same-attempt tabs are detected where BroadcastChannel is
 available. Teachers can review logged events in Results. Browser restrictions
 and duplicate detection are best effort: different student numbers, browser
-profiles, devices, offline failures, or modified clients can bypass them. Events
-are capped at 500 per attempt and may be lost if the network is unavailable.
+profiles, devices, offline failures, or modified clients can bypass them. The most recent 500 events are retained for display, while active counts are kept separately. Pending events retry while the original tab remains open; events may still be lost if the tab is closed or storage is unavailable.
 
 1. Connect this repository to Vercel and connect a Neon PostgreSQL database.
    Set a **pooled** Neon connection string as the sensitive `DATABASE_URL`
@@ -486,17 +485,17 @@ are capped at 500 per attempt and may be lost if the network is unavailable.
    has joined. Once an attempt exists, its bank is locked to protect saved
    answers and results; create a new exam instead. The editor warns about
    concurrent edits rather than silently overwriting them. The Exam setup tab
-   supports editing school, subject, term, student instructions and entry notes,
-   regenerating an access code, duplicating exams (copies start closed), permanently deleting an
+   supports regenerating an access code, duplicating exams (copies start closed), permanently deleting an
    exam, clearing attempts, and changing the teacher password. Clearing attempts
    removes responses and result keys and hides released scores; back up/export
    first. Regenerating the code invalidates the old code for both exam entry and
    result lookup; share the new code. Password changes sign out other teacher sessions. The monitor can show
    all exams owned by that teacher.
-   Integrity auto-submit is optional and off by default. A teacher can set a
-   limit of up to 500 events; only saved answers are submitted when it is
-   reached. Browser checks may be unreliable, and settings affect future events
-   rather than retrospectively submitting attempts. The question bank
+   Integrity limits and auto-submit have been removed. On upgrade, existing limits
+   are disabled; previously submitted attempts remain submitted. Integrity events
+   are still recorded as best-effort signals. Existing school, subject, term and
+   instruction data is preserved, but the removed Exam Details panel no longer
+   edits it. The question bank
    offers a Render-style part and answer preview, inline editors, and saved
    text reload. Pasted text must be previewed before saving. Part timer and
    locking settings are retained when previewed parts keep their names and
@@ -532,6 +531,32 @@ TEST_DATABASE_URL='postgresql://...' node --test tests/simple-neon.test.js tests
 
 Do not run this test against a production database. Without `TEST_DATABASE_URL`
 it is skipped. `npm test` still exercises the existing SQLite application.
+
+### Render-to-Vercel parity notes
+
+The Vercel app is a separate serverless implementation, not the Render app running
+unchanged. Core exam creation, question import and editing, grading, monitoring,
+results, and teacher actions exist in both, but important differences remain:
+
+- The Vercel attempt API currently sends the whole question paper (without answer
+  keys); Render has a one-question-at-a-time item endpoint. Treat the Vercel
+  version accordingly when planning exam security.
+- Render has a dedicated student-detail drawer with a richer per-answer timeline,
+  manual notes, and session metadata. Vercel shows answers, grades, events and
+  actions in Results and shows recent events in the live roster, but does not
+  provide that complete drawer or record all of those metadata fields.
+- Render can show an item-by-item review when results are released; Vercel's
+  private result lookup currently shows a score only. Vercel intentionally keeps
+  scores hidden until the teacher releases them and requires a private key.
+- Setup in Render has automatic save indicators and additional compatibility
+  toggles. Vercel uses explicit saves, always permits refresh in the original tab,
+  and does not claim to enforce fullscreen. The Vercel Exam Details and Integrity
+  Limit panels were removed; integrity-triggered auto-submit is disabled.
+- Existing Render/SQLite data is not automatically migrated into Neon. The two
+  versions also use different storage and session models.
+
+These differences are not a complete parity certification. Test each workflow
+and review the remaining gaps before replacing a live Render deployment.
 
 ### Original-app PostgreSQL port (development only)
 

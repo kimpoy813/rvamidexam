@@ -37,6 +37,7 @@ async function initialize() {
         ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS proctor_notes TEXT NOT NULL DEFAULT '';
         ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS max_violations INTEGER NOT NULL DEFAULT 0;
         ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS auto_submit_on_violations BOOLEAN NOT NULL DEFAULT false;
+        UPDATE simple_exams SET max_violations=0, auto_submit_on_violations=false WHERE max_violations<>0 OR auto_submit_on_violations;
         ALTER TABLE simple_exams ADD COLUMN IF NOT EXISTS results_released BOOLEAN NOT NULL DEFAULT false;
         ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS result_key_hash TEXT;
         CREATE UNIQUE INDEX IF NOT EXISTS simple_attempts_result_key ON simple_attempts(result_key_hash) WHERE result_key_hash IS NOT NULL;
@@ -53,6 +54,7 @@ async function initialize() {
         ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS integrity_cleared_count INTEGER NOT NULL DEFAULT 0;
         ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS teacher_actions JSONB NOT NULL DEFAULT '[]'::jsonb;
         ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+        ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS last_question_id TEXT;
         ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS student_class TEXT;
         ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS student_section TEXT;
         ALTER TABLE simple_attempts ADD COLUMN IF NOT EXISTS integrity_events JSONB NOT NULL DEFAULT '[]'::jsonb;
@@ -160,6 +162,11 @@ function publicQuestions(a) {
       return { id:q.id, prompt:q.prompt, choices:keys.map(n=>q.choices[n]), choiceKeys:keys, kind:q.kind || 'mcq', points:q.points ?? 1, section:q.section || null };
     });
   });
+}
+function monitorPosition(a) {
+  const {questions,shuffle_questions,shuffle_choices,order_seed,last_question_id,...row}=a;
+  const ordered=publicQuestions(a), index=ordered.findIndex(q=>q.id===last_question_id);
+  return {...row,current_question:index<0 ? null : index+1,current_part:index<0 ? null : (ordered[index].section?.title || 'Part 1')};
 }
 function attemptState(a) { return { title:a.title, school:a.school, subject:a.subject, term:a.term, instructions:a.instructions, proctorNotes:a.proctor_notes, deadline:a.deadline, submitted:!!a.submitted_at, completionReason:a.submitted_at ? a.completion_reason : null, answers:a.answers, questions:publicQuestions(a), currentSection:a.current_section, maxSection:a.max_section, sectionDeadline:sectionDeadline(a,a.current_section), serverTime:a.server_now, controlled:controlled(a), lockSections:a.lock_sections }; }
 function mark(q, value, manual) {
@@ -274,7 +281,7 @@ export default async function handler(req, res) {
             const r=await c.query('SELECT * FROM simple_exams WHERE id=$1 AND teacher_id=$2 FOR UPDATE',[examId,t.id]);
             if(!r.rows[0]) throw fail(404,'Exam not found.');const e=r.rows[0];
             const qs=e.questions.map(q=>({...q,id:id()}));
-            const added=await c.query('INSERT INTO simple_exams(id,teacher_id,title,code,duration,questions,open,lock_sections,shuffle_questions,shuffle_choices,max_violations,auto_submit_on_violations,school,subject,term,instructions,proctor_notes) VALUES($1,$2,$3,$4,$5,$6,false,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id,title,code,duration,open',[id(),t.id,`${e.title.slice(0,143)} (copy)`,crypto.randomBytes(6).toString('hex').toUpperCase(),e.duration,JSON.stringify(qs),e.lock_sections,e.shuffle_questions,e.shuffle_choices,e.max_violations,e.auto_submit_on_violations,e.school,e.subject,e.term,e.instructions,e.proctor_notes]);
+            const added=await c.query('INSERT INTO simple_exams(id,teacher_id,title,code,duration,questions,open,lock_sections,shuffle_questions,shuffle_choices,max_violations,auto_submit_on_violations,school,subject,term,instructions,proctor_notes) VALUES($1,$2,$3,$4,$5,$6,false,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id,title,code,duration,open',[id(),t.id,`${e.title.slice(0,143)} (copy)`,crypto.randomBytes(6).toString('hex').toUpperCase(),e.duration,JSON.stringify(qs),e.lock_sections,e.shuffle_questions,e.shuffle_choices,0,false,e.school,e.subject,e.term,e.instructions,e.proctor_notes]);
             return added.rows[0];
           }); break; } catch(e) { if(e.code!=='23505') throw e; }
         }
@@ -342,12 +349,14 @@ export default async function handler(req, res) {
       await limit(req,'exam-info',300);const b=await bodyOf(req),code=String(b.code||'').trim().toUpperCase();if(!code || code.length>30)throw fail(400,'Enter an exam code.');
       const r=await query('SELECT title,school,subject,term,instructions,proctor_notes,duration,open,jsonb_array_length(questions) AS question_count FROM simple_exams WHERE code=$1',[code]);if(!r.rows[0])throw fail(404,'Exam code not found.');return send(res,200,r.rows[0]);
     }
+    // Retain a compatibility endpoint for older tabs but do not allow a removed
+    // auto-submit feature to be silently re-enabled.
     const securityMatch=path.match(/^simple\/exams\/([\w-]+)\/integrity-settings$/);
     if(securityMatch && (method==='GET' || method==='POST')) {
       const t=await teacher(req), examId=securityMatch[1];
-      if(method==='GET') {const r=await query('SELECT max_violations,auto_submit_on_violations FROM simple_exams WHERE id=$1 AND teacher_id=$2',[examId,t.id]);if(!r.rows[0])throw fail(404,'Exam not found.');return send(res,200,r.rows[0]);}
-      const b=await bodyOf(req);if(!Number.isInteger(b.maxViolations)||b.maxViolations<0||b.maxViolations>500||typeof b.autoSubmit!=='boolean'||(b.autoSubmit && b.maxViolations===0))throw fail(400,'Set a flag limit from 1 to 500 to enable auto-submit (or 0–500 when disabled).');
-      const r=await query('UPDATE simple_exams SET max_violations=$3,auto_submit_on_violations=$4 WHERE id=$1 AND teacher_id=$2 RETURNING max_violations,auto_submit_on_violations',[examId,t.id,b.maxViolations,b.autoSubmit]);if(!r.rows[0])throw fail(404,'Exam not found.');return send(res,200,r.rows[0]);
+      const r=await query('SELECT id FROM simple_exams WHERE id=$1 AND teacher_id=$2',[examId,t.id]);if(!r.rows.length)throw fail(404,'Exam not found.');
+      if(method==='POST'){const b=await bodyOf(req);if(b.maxViolations!==0 || b.autoSubmit!==false)throw fail(400,'Integrity limits are no longer supported.');}
+      return send(res,200,{max_violations:0,auto_submit_on_violations:false});
     }
     const toggleMatch = path.match(/^simple\/exams\/([\w-]+)\/open$/);
     if (toggleMatch && method === 'POST') {
@@ -359,24 +368,25 @@ export default async function handler(req, res) {
     }
     if(path==='simple/progress-all' && method==='GET') {
       const t=await teacher(req);
-      const r=await query(`SELECT a.token_hash AS attempt_id,a.student_name,a.student_no,a.student_class,a.student_section,a.started_at,a.submitted_at,a.deadline,a.last_seen_at,a.score,a.total,a.pending,a.integrity_events,a.completion_reason,a.teacher_actions,e.id AS exam_id,e.title AS exam_title,jsonb_array_length(e.questions) AS question_total,
+      const r=await query(`SELECT a.token_hash AS attempt_id,a.student_name,a.student_no,a.student_class,a.student_section,a.started_at,a.submitted_at,a.deadline,a.last_seen_at,a.score,a.total,a.pending,a.integrity_events,a.completion_reason,a.teacher_actions,a.last_question_id,a.current_section,e.questions,e.shuffle_questions,e.shuffle_choices,a.order_seed,e.id AS exam_id,e.title AS exam_title,jsonb_array_length(e.questions) AS question_total,
         (a.last_seen_at > clock_timestamp() - interval '35 seconds' AND a.submitted_at IS NULL AND a.deadline > clock_timestamp()) AS recently_seen,
         GREATEST(a.integrity_total-a.integrity_cleared_total,0) AS integrity_count,
         (SELECT count(*)::int FROM jsonb_each(a.answers) item WHERE item.value <> '""'::jsonb AND item.value <> '[]'::jsonb AND item.value <> 'null'::jsonb) AS answered
         FROM simple_attempts a JOIN simple_exams e ON e.id=a.exam_id WHERE e.teacher_id=$1 ORDER BY a.started_at DESC`,[t.id]);
-      return send(res,200,{attempts:r.rows});
+      return send(res,200,{attempts:r.rows.map(monitorPosition)});
     }
     // Progress is a snapshot of saved answers, not evidence that a student is online.
     const progressMatch = path.match(/^simple\/exams\/([\w-]+)\/progress$/);
     if (progressMatch && method === 'GET') {
       const t = await teacher(req);
-      const exam = await query('SELECT id, jsonb_array_length(questions) AS total FROM simple_exams WHERE id=$1 AND teacher_id=$2', [progressMatch[1], t.id]);
+      const exam = await query('SELECT id, questions, shuffle_questions, shuffle_choices, jsonb_array_length(questions) AS total FROM simple_exams WHERE id=$1 AND teacher_id=$2', [progressMatch[1], t.id]);
       if (!exam.rows[0]) throw fail(404, 'Exam not found.');
-      const r = await query(`SELECT student_name, student_no, student_class, student_section, token_hash AS attempt_id, started_at, submitted_at, deadline, last_seen_at, score, total, pending, integrity_events, completion_reason, teacher_actions,
+      const r = await query(`SELECT student_name, student_no, student_class, student_section, token_hash AS attempt_id, started_at, submitted_at, deadline, last_seen_at, score, total, pending, integrity_events, completion_reason, teacher_actions, last_question_id, current_section, order_seed,
         (last_seen_at > clock_timestamp() - interval '35 seconds' AND submitted_at IS NULL AND deadline > clock_timestamp()) AS recently_seen, GREATEST(integrity_total-integrity_cleared_total,0) AS integrity_count,
         (SELECT count(*)::int FROM jsonb_each(answers) item WHERE item.value <> '""'::jsonb AND item.value <> '[]'::jsonb AND item.value <> 'null'::jsonb) AS answered
         FROM simple_attempts WHERE exam_id=$1 ORDER BY started_at DESC`, [progressMatch[1]]);
-      return send(res, 200, { total: exam.rows[0].total, attempts: r.rows });
+      const {questions,shuffle_questions,shuffle_choices}=exam.rows[0];
+      return send(res, 200, { total: exam.rows[0].total, attempts: r.rows.map(a=>monitorPosition({...a,questions,shuffle_questions,shuffle_choices})) });
     }
     const resultMatch = path.match(/^simple\/exams\/([\w-]+)\/results$/);
     if (resultMatch && method === 'GET') {
@@ -484,9 +494,6 @@ export default async function handler(req, res) {
         const existing=await c.query("SELECT * FROM simple_attempts WHERE exam_id=$1 AND lower(trim(student_no))=lower(trim($2)) AND submitted_at IS NULL AND deadline > clock_timestamp() ORDER BY started_at DESC LIMIT 1 FOR UPDATE",[exam.rows[0].id,no]);
         if(existing.rows.length) {
           const event=await recordIntegrity(c,existing.rows[0].token_hash,'duplicate_join');
-          if(event.recorded && exam.rows[0].auto_submit_on_violations && exam.rows[0].max_violations>0 && event.count>=exam.rows[0].max_violations){
-            await finalize(c,{...existing.rows[0],questions:exam.rows[0].questions});await c.query("UPDATE simple_attempts SET completion_reason='integrity_limit' WHERE token_hash=$1",[existing.rows[0].token_hash]);
-          }
           return true;
         }
         await c.query("INSERT INTO simple_attempts(token_hash,exam_id,student_name,student_no,started_at,deadline,order_seed,section_starts,student_class,student_section,result_key_hash) VALUES($1,$2,$3,$4,clock_timestamp(),clock_timestamp()+($5 * interval '1 minute'),$6,jsonb_build_object('0',extract(epoch from clock_timestamp()) * 1000),$7,$8,$9)", [hash(token),exam.rows[0].id,name,no,exam.rows[0].duration,crypto.randomInt(1,2**31),studentClass,studentSection,hash(resultKey)]);
@@ -499,12 +506,15 @@ export default async function handler(req, res) {
     if (attemptMatch) {
       const token = String(req.headers['x-exam-token'] || ''), action = attemptMatch[1];
       if ((!action && method !== 'GET') || (action && method !== 'POST')) throw fail(405,'Method not allowed.');
-      const b = ['answer','navigate','integrity'].includes(action) ? await bodyOf(req) : {};
+      const b = ['answer','navigate','integrity','heartbeat'].includes(action) ? await bodyOf(req) : {};
       const data = await tx(async c => {
         let a = await lockAttempt(c, token);
         if (!a.submitted_at && new Date(a.deadline).getTime() <= new Date(a.server_now).getTime()) a = await finalize(c,a);
         if (action === 'heartbeat') {
-          if (!a.submitted_at) await c.query('UPDATE simple_attempts SET last_seen_at=clock_timestamp() WHERE token_hash=$1',[a.token_hash]);
+          if (!a.submitted_at) {
+            if(b.questionId !== undefined && (typeof b.questionId !== 'string' || !a.questions.some(q=>q.id===b.questionId && (!controlled(a) || sectionOf(q)===a.current_section)))) throw fail(400,'Invalid current question.');
+            await c.query('UPDATE simple_attempts SET last_seen_at=clock_timestamp(),last_question_id=COALESCE($2,last_question_id) WHERE token_hash=$1',[a.token_hash,b.questionId ?? null]);
+          }
           return {submitted:!!a.submitted_at,deadline:a.deadline,serverTime:a.server_now};
         }
         if (action === 'integrity') {
@@ -512,9 +522,6 @@ export default async function handler(req, res) {
           // Retry-capable events may arrive after submission due to network loss.
           if(a.submitted_at && !b.eventId) throw fail(409,'This attempt is already submitted.');
           const event=await recordIntegrity(c,a.token_hash,b.type,b.eventId || null);
-          if(event.recorded && !a.submitted_at && a.auto_submit_on_violations && a.max_violations>0 && event.count>=a.max_violations){
-            a=await finalize(c,a);await c.query("UPDATE simple_attempts SET completion_reason='integrity_limit' WHERE token_hash=$1",[a.token_hash]);
-          }
           return {ok:true,recorded:event.recorded,submitted:!!a.submitted_at};
         }
         if (action === 'answer') {

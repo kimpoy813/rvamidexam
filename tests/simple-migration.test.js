@@ -14,6 +14,7 @@ test('existing simple exams and integer scores survive the additive grading upgr
     CREATE TABLE simple_attempts (token_hash TEXT PRIMARY KEY,exam_id TEXT NOT NULL REFERENCES simple_exams(id),student_name TEXT NOT NULL,student_no TEXT NOT NULL,answers JSONB NOT NULL DEFAULT '{}'::jsonb,started_at TIMESTAMPTZ NOT NULL DEFAULT now(),deadline TIMESTAMPTZ NOT NULL,submitted_at TIMESTAMPTZ,score INTEGER,total INTEGER);
     INSERT INTO simple_teachers(id,username,salt,password_hash) VALUES('teacher','existing','salt','hash');`);
   await setup.query('INSERT INTO simple_exams(id,teacher_id,title,code,duration,questions) VALUES($1,$2,$3,$4,$5,$6)', ['exam','teacher','Existing exam','CODE',10,JSON.stringify([{id:'q',prompt:'Old question',choices:['A','B'],answer:0}])]);
+  await setup.query('ALTER TABLE simple_exams ADD COLUMN max_violations integer NOT NULL DEFAULT 0; ALTER TABLE simple_exams ADD COLUMN auto_submit_on_violations boolean NOT NULL DEFAULT false; UPDATE simple_exams SET max_violations=3,auto_submit_on_violations=true');
   await setup.query("INSERT INTO simple_attempts(token_hash,exam_id,student_name,student_no,answers,deadline,submitted_at,score,total) VALUES($1,'exam','Old Student','001',$2,now(),now(),1,1)",[digest,JSON.stringify({q:0})]);
   process.env.DATABASE_URL=conn.toString();const {default:handler,closeTestPool}=await import('../api/handler.js');const server=http.createServer(handler);server.listen(0,'127.0.0.1');await once(server,'listening');
   try {
@@ -21,6 +22,7 @@ test('existing simple exams and integer scores survive the additive grading upgr
     const keyResponse=await fetch(`http://127.0.0.1:${server.address().port}/api/simple/attempt/result-key`,{method:'POST',headers:{'X-Exam-Token':token}});const keyBody=await keyResponse.json();assert.equal(keyResponse.status,200);assert.match(keyBody.resultKey,/^[A-Za-z0-9_-]{22}$/);
     await setup.query("UPDATE simple_exams SET results_released=true WHERE id='exam'");
     const lookup=await fetch(`http://127.0.0.1:${server.address().port}/api/simple/result-lookup`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:'CODE',number:'001',resultKey:keyBody.resultKey})});assert.equal(lookup.status,200);assert.equal((await lookup.json()).score,1);
+    const settings=await setup.query('SELECT max_violations,auto_submit_on_violations FROM simple_exams');assert.deepEqual(settings.rows[0],{max_violations:0,auto_submit_on_violations:false});
     const fields=await setup.query("SELECT column_name,data_type FROM information_schema.columns WHERE table_schema=$1 AND table_name='simple_attempts'",[schema]);assert.equal(fields.rows.find(r=>r.column_name==='score').data_type,'double precision');
     const persisted=await setup.query('SELECT score,total,pending,manual_scores FROM simple_attempts');assert.deepEqual(persisted.rows[0],{score:1,total:1,pending:0,manual_scores:{}});
   } finally {server.closeAllConnections();await new Promise(r=>server.close(r));await closeTestPool();delete process.env.DATABASE_URL;await setup.end();await admin.query(`DROP SCHEMA "${schema}" CASCADE`);await admin.end();}

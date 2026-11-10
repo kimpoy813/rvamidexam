@@ -1,13 +1,14 @@
+import { addIcon } from './neon-icons.js';
 const $ = s => document.querySelector(s);
 let token = sessionStorage.getItem('simple_teacher_token') || '';
 let selected = '', examList = [], resultsGeneration = 0, progressGeneration = 0, progressTimer;
-let currentProgress = null, currentResults = null, feedClearedAt = 0, feedExam = '', integrityGeneration=0, integrityDirty=false, loadedIntegrityExam='', detailsDirty=false, loadedDetailsExam='', detailsRevision='', detailsGeneration=0;
+let currentProgress = null, currentResults = null, feedClearedAt = 0, feedExam = '', monitorActionPending=0;
 let editExamId = '', bankRevision = '', bankLocked = false, draftDirty = false, editorGeneration = 0, pasteSource = '', textDirty = false;
 async function api(path, body) {
   const res = await fetch('/api/simple/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { ...(body === undefined ? {} : { 'Content-Type':'application/json' }), ...(token ? { 'X-Teacher-Token': token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
   let data; try { data = await res.json(); } catch { throw new Error('Could not reach the exam server.'); } if (!res.ok) throw new Error(data.error || 'Request failed.'); return data;
 }
-function message(text, bad = false) { const node = $('#message'); node.textContent = text; node.className = 'neon-alert' + (bad ? ' error' : ''); }
+function message(text, bad = false) { const node = $('#message'); node.textContent = text; const dismiss=document.createElement('button');dismiss.type='button';dismiss.className='alert-dismiss';dismiss.setAttribute('aria-label','Dismiss message');dismiss.textContent='×';dismiss.addEventListener('click',()=>node.classList.add('hidden'));node.append(dismiss);node.className = 'neon-alert' + (bad ? ' error' : ''); }
 function view(name) {
   $('#overviewView').classList.toggle('hidden', name !== 'overview');
   $('#questionsView').classList.toggle('hidden', name !== 'questions');
@@ -34,19 +35,19 @@ function part(initial = null) {
   const bulk=document.createElement('select'); bulk.setAttribute('aria-label','Set every question type in part');
   for (const [value,label] of [['','Set every item type…'],['mcq','Multiple choice'],['multiselect','Multiple answers'],['truefalse','True / False'],['short','Short answer'],['essay','Essay']]) {const option=document.createElement('option');option.value=value;option.textContent=label;bulk.append(option);}
   bulk.addEventListener('change',()=>{if(!bulk.value)return;const next=bulk.value;bulk.value='';if(!confirm('Change every question type in this part? Answer keys may need to be re-entered.'))return;for(const q of section.querySelectorAll('.question-editor')) { const type=q.querySelector('.kind'); if(type.value!==next){type.value=next;type.dispatchEvent(new window.Event('change',{bubbles:true}));} } });
-  const edit=document.createElement('button');edit.type='button';edit.className='btn btn-ghost btn-sm';edit.textContent='Edit part';tools.append(bulk,edit);header.append(tools);section.append(header);
+  const edit=document.createElement('button');edit.type='button';edit.className='btn btn-ghost btn-sm';edit.textContent='Edit part';addIcon(edit,'edit');tools.append(bulk,edit);header.append(tools);section.append(header);
   const directions=document.createElement('div');directions.className='bp-sec-instructions';section.append(directions);
   const panel=document.createElement('div'); panel.className='bp-section-editor hidden';section.append(panel);
   const titleLabel=document.createElement('label');titleLabel.textContent='Part title';const title=document.createElement('input');title.className='part-title';title.required=true;title.maxLength=200;title.value=initial?.title || `Part ${$('#editors').children.length+1}`;titleLabel.append(title);panel.append(titleLabel);
   const instLabel=document.createElement('label');instLabel.textContent='Directions shown to students';const instructions=document.createElement('textarea');instructions.className='part-instructions';instructions.maxLength=10000;instructions.value=initial?.instructions || '';instLabel.append(instructions);panel.append(instLabel);
   const timerLabel=document.createElement('label');timerLabel.textContent='Part time limit in minutes (0 = no separate limit)';const timer=document.createElement('input');timer.type='number';timer.className='part-minutes';timer.min='0';timer.max='600';timer.step='1';timer.required=true;timer.value=String(initial?.minutes ?? 0);timerLabel.append(timer);panel.append(timerLabel);
   const lockLabel=document.createElement('label');const lock=document.createElement('input');lock.type='checkbox';lock.className='part-lock';lock.checked=initial?.lock_after !== false;lockLabel.append(lock,document.createTextNode(' Lock this part after leaving it (when exam option is on)'));panel.append(lockLabel);
-  const done=document.createElement('button');done.type='button';done.className='btn btn-primary btn-sm';done.textContent='Done';done.addEventListener('click',()=>{panel.classList.add('hidden');edit.setAttribute('aria-expanded','false');});panel.append(done);
-  const remove=document.createElement('button');remove.type='button';remove.className='btn btn-danger btn-sm';remove.textContent='Delete part';remove.addEventListener('click',()=>{if(!confirm('Remove this part and all its questions?'))return;section.remove();renumber();dirty();});panel.append(remove);
+  const done=document.createElement('button');done.type='button';done.className='btn btn-primary btn-sm';done.textContent='Done';addIcon(done,'check');done.addEventListener('click',()=>{panel.classList.add('hidden');edit.setAttribute('aria-expanded','false');});panel.append(done);
+  const remove=document.createElement('button');remove.type='button';remove.className='btn btn-danger btn-sm';remove.textContent='Delete part';addIcon(remove,'trash');remove.addEventListener('click',()=>{if(!confirm('Remove this part and all its questions?'))return;section.remove();renumber();dirty();});panel.append(remove);
   edit.setAttribute('aria-expanded','false');edit.addEventListener('click',()=>{const open=panel.classList.toggle('hidden');edit.setAttribute('aria-expanded',String(!open));});
   const refresh=()=>{name.textContent=title.value || 'Untitled part';directions.textContent=instructions.value ? `Directions: ${instructions.value}` : '';directions.classList.toggle('hidden',!instructions.value);};title.addEventListener('input',refresh);instructions.addEventListener('input',refresh);refresh();
   const questions=document.createElement('div');questions.className='part-questions bp-question-list';section.append(questions);
-  const add=document.createElement('button');add.type='button';add.className='btn btn-ghost btn-sm bp-add-question';add.textContent='+ Add question';add.addEventListener('click',()=>{editor(null,section);dirty();});section.append(add);
+  const add=document.createElement('button');add.type='button';add.className='btn btn-ghost btn-sm bp-add-question';add.textContent='Add question';addIcon(add,'plus');add.addEventListener('click',()=>{editor(null,section);dirty();});section.append(add);
   $('#editors').append(section);counts();return section;
 }
 function editor(initial = null, section = $('#editors .part-editor:last-child')) {
@@ -63,9 +64,9 @@ function editor(initial = null, section = $('#editors .part-editor:last-child'))
   const optionsHost=document.createElement('div'); optionsHost.className='options-host'; box.append(optionsHost);
   const keyLabel=document.createElement('label'); keyLabel.textContent='Correct choice (select multiple for multiple answers; leave blank for manual grading)'; const select=document.createElement('select'); select.className='answer'; keyLabel.append(select); box.append(keyLabel);
   const textLabel=document.createElement('label'); textLabel.textContent='Accepted answers (separate alternatives with |; leave blank for manual grading)'; const textKey=document.createElement('input'); textKey.className='text-key'; textKey.value=Array.isArray(initial?.answer) ? initial.answer.join(' | ') : typeof initial?.answer === 'string' ? initial.answer : ''; textLabel.append(textKey); box.append(textLabel);
-  const remove=document.createElement('button'); remove.type='button'; remove.className='btn btn-ghost btn-sm'; remove.textContent='Remove question'; remove.addEventListener('click',()=>{ box.remove(); renumber(); dirty(); }); box.append(remove);
-  const addChoice=document.createElement('button'); addChoice.type='button'; addChoice.className='btn btn-ghost btn-sm'; addChoice.textContent='+ Add choice';
-  const removeChoice=document.createElement('button'); removeChoice.type='button'; removeChoice.className='btn btn-ghost btn-sm'; removeChoice.textContent='Remove last choice'; box.append(addChoice,removeChoice);
+  const remove=document.createElement('button'); remove.type='button'; remove.className='btn btn-ghost btn-sm'; remove.textContent='Remove question'; addIcon(remove,'trash'); remove.addEventListener('click',()=>{ box.remove(); renumber(); dirty(); }); box.append(remove);
+  const addChoice=document.createElement('button'); addChoice.type='button'; addChoice.className='btn btn-ghost btn-sm'; addChoice.textContent='Add choice'; addIcon(addChoice,'plus');
+  const removeChoice=document.createElement('button'); removeChoice.type='button'; removeChoice.className='btn btn-ghost btn-sm'; removeChoice.textContent='Remove last choice'; addIcon(removeChoice,'trash'); box.append(addChoice,removeChoice);
   function refreshKey(selected = []) { select.multiple=kind.value==='multiselect'; select.replaceChildren(); if (kind.value !== 'multiselect') { const blank=document.createElement('option'); blank.value=''; blank.textContent='No key — manual grading'; select.append(blank); } [...optionsHost.querySelectorAll('.option')].forEach((_,n)=>{ const option=document.createElement('option'); option.value=String(n); option.textContent=`Choice ${n+1}`; option.selected=selected.includes(n); select.append(option); }); if (!select.multiple && !selected.length) select.value=''; }
   function choice(value='') { const label=document.createElement('label'); label.textContent=`Choice ${optionsHost.children.length+1}`; const input=document.createElement('input'); input.type='text'; input.className='option'; input.maxLength=2000; input.value=value; label.append(input); optionsHost.append(label); }
   const initialChoices = initial?.choices?.length ? initial.choices : kind.value==='truefalse' ? ['True','False'] : ['', '', '', '']; initialChoices.forEach(choice);
@@ -86,7 +87,7 @@ function editor(initial = null, section = $('#editors .part-editor:last-child'))
   const quick=kind.cloneNode(true); quick.className='bp-kind-select'; quick.value=kind.value; quick.setAttribute('aria-label','Question type'); head.append(quick);
   const pointLabel=document.createElement('span');pointLabel.className='bp-points';head.append(pointLabel);
   const spacer=document.createElement('div');spacer.className='spacer';head.append(spacer);
-  const toggle=document.createElement('button');toggle.type='button';toggle.className='btn btn-ghost btn-sm';toggle.textContent='Edit';toggle.setAttribute('aria-expanded',String(!initial));toggle.addEventListener('click',()=>{const hidden=panel.classList.toggle('hidden');toggle.setAttribute('aria-expanded',String(!hidden));});head.append(toggle);
+  const toggle=document.createElement('button');toggle.type='button';toggle.className='btn btn-ghost btn-sm';toggle.textContent='Edit';addIcon(toggle,'edit');toggle.setAttribute('aria-expanded',String(!initial));toggle.addEventListener('click',()=>{const hidden=panel.classList.toggle('hidden');toggle.setAttribute('aria-expanded',String(!hidden));});head.append(toggle);
   const promptView=document.createElement('div');promptView.className='bp-prompt';const response=document.createElement('div');response.className='bp-response';const answerView=document.createElement('div');answerView.className='bp-answer';
   box.prepend(head);box.append(promptView,response,answerView,panel);
   const renderPreview=()=>{
@@ -120,7 +121,7 @@ function newDraft() {
   editExamId = ''; bankRevision = ''; bankLocked = false; draftDirty = false; textDirty = false; pasteSource = ''; editorGeneration++; $('#importText').value=''; $('#importPreview').replaceChildren(); $('#examSettings').open=true;
   $('#examTitle').value = ''; $('#duration').value = 60; $('#lockSections').checked=false; $('#shuffleQuestions').checked=false; $('#shuffleChoices').checked=false; $('#editors').replaceChildren(); editor(null,part());
   $('#bankMode').textContent = 'Creating a new exam. Configure parts and exam options below.';
-  $('#saveBank').textContent = 'Create exam'; $('#saveBank').disabled = false; bankStatus();
+  $('#saveBank').textContent = 'Create exam';addIcon($('#saveBank'),'save'); $('#saveBank').disabled = false; bankStatus();
 }
 async function loadBank({ confirmed=false } = {}) {
   if (!selected) return message('Select an exam first.', true);
@@ -131,7 +132,7 @@ async function loadBank({ confirmed=false } = {}) {
   editExamId = examId; bankRevision = data.revision; bankLocked = data.locked; draftDirty = false; textDirty=false; pasteSource=data.text; $('#importText').value=data.text; $('#importPreview').replaceChildren(); $('#examSettings').open=false;
   $('#examTitle').value = data.title; $('#duration').value = data.duration; $('#lockSections').checked=data.lock_sections; $('#shuffleQuestions').checked=data.shuffle_questions; $('#shuffleChoices').checked=data.shuffle_choices; loadSections(groupedQuestions(data.questions));
   $('#bankMode').textContent = data.locked ? `Viewing ${data.title}. This exam has attempts and cannot be edited; create a new exam instead.` : `Editing ${data.title}. Saving replaces this exam's question bank.`;
-  $('#saveBank').textContent = 'Save question bank'; $('#saveBank').disabled = data.locked; bankStatus();
+  $('#saveBank').textContent = 'Save question bank';addIcon($('#saveBank'),'save'); $('#saveBank').disabled = data.locked; bankStatus();
 }
 function showSelection() {
   const exam = examList.find(e => e.id === selected);
@@ -142,7 +143,7 @@ function showSelection() {
 }
 function clearResults() {
   for (const selector of ['#joinedKpi', '#activeKpi', '#submittedKpi', '#averageKpi']) $(selector).textContent = '—';
-  currentResults=null; $('#releaseResults').disabled=true; $('#releaseStatus').textContent='Results hidden'; $('#resultsTitle').textContent = 'Scoreboard'; $('#resultRows').replaceChildren(); $('#itemRows').replaceChildren(); $('#hardItems').textContent='No assessed answers yet.'; $('#distribution').replaceChildren(); for(const id of ['resSubmitted','resAverage','resHighest','resLowest','resPassing','resPending']) $('#'+id).textContent='—'; $('#resMedian').textContent='median —';
+  currentResults=null; $('#releaseResults').disabled=true;$('#releaseResults').textContent='Release scores';addIcon($('#releaseResults'),'eye'); $('#releaseStatus').textContent='Results hidden'; $('#resultsTitle').textContent = 'Scoreboard'; $('#resultRows').replaceChildren(); $('#itemRows').replaceChildren(); $('#hardItems').textContent='No assessed answers yet.'; $('#distribution').replaceChildren(); for(const id of ['resSubmitted','resAverage','resHighest','resLowest','resPassing','resPending']) $('#'+id).textContent='—'; $('#resMedian').textContent='median —';
 }
 async function exams() {
   const data = await api('exams'); examList = data.exams;
@@ -156,17 +157,19 @@ async function exams() {
   for (const e of examList) {
     const row = document.createElement('div'); row.className = 'exam-row'; const details = document.createElement('div');
     const title = document.createElement('strong'); title.textContent = e.title; const meta = document.createElement('div'); meta.className = 'muted tiny'; meta.textContent = `Code: ${e.code} · ${e.duration} minutes · ${e.open ? 'Open' : 'Closed'}`; details.append(title, meta);
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-ghost btn-sm'; button.textContent = 'View results';
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-ghost btn-sm'; button.textContent = 'View results';addIcon(button,'chart');
     button.addEventListener('click', () => { selected = e.id; currentProgress=null; select.value = selected; showSelection(); progress(); view('results'); results().catch(err => message(err.message,true)); });
-    const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'btn btn-ghost btn-sm'; toggle.textContent = e.open ? 'Close exam' : 'Open exam';
+    const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'btn btn-ghost btn-sm'; toggle.textContent = e.open ? 'Close exam' : 'Open exam';addIcon(toggle,e.open?'lock':'unlock');
     toggle.addEventListener('click', async () => { toggle.disabled = true; try { await api(`exams/${encodeURIComponent(e.id)}/open`, { open: !e.open }); await exams(); } catch(err) { message(err.message,true); toggle.disabled = false; } });
-    const duplicate=document.createElement('button');duplicate.type='button';duplicate.className='btn btn-ghost btn-sm';duplicate.textContent='Duplicate';
-    duplicate.addEventListener('click',async()=>{if((draftDirty || textDirty) && !confirm('Discard unsaved question-bank changes and open the copied exam?'))return;if(integrityDirty && !confirm('Discard unsaved integrity settings?'))return;if(detailsDirty && !confirm('Discard unsaved exam details?'))return;duplicate.disabled=true;const generation=editorGeneration;try{const copy=await api(`exams/${encodeURIComponent(e.id)}/duplicate`,{});if(editorGeneration!==generation){await exams();message('Exam copied as a closed exam. Your newer draft was kept.');return;}selected=copy.id;newDraft();await exams();await Promise.all([loadIntegritySettings(),loadDetails()]);message('Exam copied as a closed exam.');}catch(err){message(err.message,true);duplicate.disabled=false;}});
-    const reset=document.createElement('button');reset.type='button';reset.className='btn btn-danger btn-sm';reset.textContent='Clear attempts';
+    const newCode=document.createElement('button');newCode.type='button';newCode.className='btn btn-ghost btn-sm';newCode.textContent='Generate new code';addIcon(newCode,'key');
+    newCode.addEventListener('click',async()=>{if(!confirm(`Generate a new code for “${e.title}”? The old code will no longer work for joining or checking results. Share the new code with students.`))return;newCode.disabled=true;try{const data=await api(`exams/${encodeURIComponent(e.id)}/new-code`,{});await exams();message(`New access code: ${data.code}`);}catch(err){message(err.message,true);newCode.disabled=false;}});
+    const duplicate=document.createElement('button');duplicate.type='button';duplicate.className='btn btn-ghost btn-sm';duplicate.textContent='Duplicate';addIcon(duplicate,'copy');
+    duplicate.addEventListener('click',async()=>{if((draftDirty || textDirty) && !confirm('Discard unsaved question-bank changes and open the copied exam?'))return;duplicate.disabled=true;const generation=editorGeneration;try{const copy=await api(`exams/${encodeURIComponent(e.id)}/duplicate`,{});if(editorGeneration!==generation){await exams();message('Exam copied as a closed exam. Your newer draft was kept.');return;}selected=copy.id;newDraft();await exams();message('Exam copied as a closed exam.');}catch(err){message(err.message,true);duplicate.disabled=false;}});
+    const reset=document.createElement('button');reset.type='button';reset.className='btn btn-danger btn-sm';reset.textContent='Clear attempts';addIcon(reset,'reset');
     reset.addEventListener('click',async()=>{if(!confirm(`Delete ALL attempts, answers, grades, and result keys for “${e.title}”? Score release will be turned off. This cannot be undone.`)||!confirm('Are you sure? Export results first if you need them.'))return;reset.disabled=true;try{const r=await api(`exams/${encodeURIComponent(e.id)}/reset-attempts`,{});await exams();message(`Deleted ${r.removed} attempt(s). Reload the saved bank to edit it.`);}catch(err){message(err.message,true);reset.disabled=false;}});
-    const remove=document.createElement('button');remove.type='button';remove.className='btn btn-danger btn-sm';remove.textContent='Delete exam';
-    remove.addEventListener('click',async()=>{if(editExamId===e.id && (draftDirty||textDirty) && !confirm('Discard unsaved question-bank changes?'))return;if(!confirm(`Permanently delete “${e.title}” and ALL its attempts and results?`) || !confirm('This cannot be undone. Delete the exam and its data?'))return;remove.disabled=true;const generation=editorGeneration;try{await api(`exams/${encodeURIComponent(e.id)}/delete`,{});if(editExamId===e.id){if(generation===editorGeneration)newDraft();else{editExamId='';bankRevision='';bankLocked=false;draftDirty=true;$('#saveBank').disabled=false;$('#saveBank').textContent='Create exam';$('#bankMode').textContent='The original exam was deleted. Your edited draft can be saved as a new exam.';bankStatus();}}await exams();await Promise.all([loadIntegritySettings(),loadDetails()]);message('Exam deleted.');}catch(err){message(err.message,true);remove.disabled=false;}});
-    const actions = document.createElement('div'); actions.className = 'row wrap'; actions.append(button,toggle,duplicate,reset,remove); row.append(details,actions); container.append(row);
+    const remove=document.createElement('button');remove.type='button';remove.className='btn btn-danger btn-sm';remove.textContent='Delete exam';addIcon(remove,'trash');
+    remove.addEventListener('click',async()=>{if(editExamId===e.id && (draftDirty||textDirty) && !confirm('Discard unsaved question-bank changes?'))return;if(!confirm(`Permanently delete “${e.title}” and ALL its attempts and results?`) || !confirm('This cannot be undone. Delete the exam and its data?'))return;remove.disabled=true;const generation=editorGeneration;try{await api(`exams/${encodeURIComponent(e.id)}/delete`,{});if(editExamId===e.id){if(generation===editorGeneration)newDraft();else{editExamId='';bankRevision='';bankLocked=false;draftDirty=true;$('#saveBank').disabled=false;$('#saveBank').textContent='Create exam';addIcon($('#saveBank'),'save');$('#bankMode').textContent='The original exam was deleted. Your edited draft can be saved as a new exam.';bankStatus();}}await exams();message('Exam deleted.');}catch(err){message(err.message,true);remove.disabled=false;}});
+    const actions = document.createElement('div'); actions.className = 'row wrap'; actions.append(button,toggle,newCode,duplicate,reset,remove); row.append(details,actions); container.append(row);
   }
   await results(); await progress();
 }
@@ -175,7 +178,7 @@ async function results() {
   if (!examId) return;
   const data = await api(`exams/${encodeURIComponent(examId)}/results`);
   if (generation !== resultsGeneration || examId !== selected) return;
-  currentResults=data; $('#releaseResults').disabled=false; $('#releaseResults').textContent=data.resultsReleased ? 'Hide scores' : 'Release scores'; $('#releaseStatus').textContent=data.resultsReleased ? 'Scores released' : 'Results hidden'; $('#resultsTitle').textContent = 'Scoreboard'; renderAnalytics(data);
+  currentResults=data; $('#releaseResults').disabled=false; $('#releaseResults').textContent=data.resultsReleased ? 'Hide scores' : 'Release scores';addIcon($('#releaseResults'),data.resultsReleased?'eyeOff':'eye'); $('#releaseStatus').textContent=data.resultsReleased ? 'Scores released' : 'Results hidden'; $('#resultsTitle').textContent = 'Scoreboard'; renderAnalytics(data);
   const done = data.results.filter(r => r.submitted_at); const final = done.filter(r => !r.pending && r.completion_reason !== 'invalidated'); const totalScore = final.reduce((sum,r) => sum + (r.total ? r.score / r.total : 0), 0);
   $('#joinedKpi').textContent = data.results.length; $('#submittedKpi').textContent = done.length; $('#activeKpi').textContent = data.results.length - done.length;
   $('#averageKpi').textContent = final.length ? `${Math.round(totalScore / final.length * 100)}%` : '—';
@@ -192,7 +195,7 @@ async function results() {
       const description=document.createElement('div'); description.textContent=`${q.prompt} — ${display} (key: ${expected})`; item.append(description);
       if (r.submitted_at) {
         const label=document.createElement('label'); label.textContent=`Award points (0–${q.points ?? 1}) `; const points=document.createElement('input'); points.type='number'; points.min='0'; points.max=String(q.points ?? 1); points.step='any'; points.style.width='80px'; const prior=r.manual_scores?.[q.id]; points.value=prior ? String(prior.points) : ''; label.append(points); item.append(label);
-        const button=document.createElement('button'); button.type='button'; button.className='btn btn-ghost btn-sm'; button.textContent='Save grade'; button.addEventListener('click',async()=>{ if(points.value === '' || !points.checkValidity()) return message('Enter a valid grade.',true); button.disabled=true; try { await api(`exams/${encodeURIComponent(examId)}/grade`,{attemptId:r.attempt_id,questionId:q.id,points:Number(points.value)}); await results(); message('Grade saved.'); } catch(err){ message(err.message,true); button.disabled=false; } }); item.append(button);
+        const button=document.createElement('button'); button.type='button'; button.className='btn btn-ghost btn-sm'; button.textContent='Save grade';addIcon(button,'save'); button.addEventListener('click',async()=>{ if(points.value === '' || !points.checkValidity()) return message('Enter a valid grade.',true); button.disabled=true; try { await api(`exams/${encodeURIComponent(examId)}/grade`,{attemptId:r.attempt_id,questionId:q.id,points:Number(points.value)}); await results(); message('Grade saved.'); } catch(err){ message(err.message,true); button.disabled=false; } }); item.append(button);
       }
       list.append(item);
     }
@@ -217,12 +220,15 @@ function actionControls(attempt,examId) {
   const flagCount=activeFlags(attempt);
   if(flagCount) buttons.push(['dismiss_flag','Clear flags']);
   if(attempt.completion_reason!=='invalidated') buttons.push(['invalidate','Invalidate']);
-  for(const [action,label,minutes] of buttons){const button=document.createElement('button');button.type='button';button.className=`btn btn-sm ${action==='invalidate'?'btn-danger':'btn-ghost'}`;button.textContent=label;
+  for(const [action,label,minutes] of buttons){const button=document.createElement('button');button.type='button';button.className=`btn btn-sm ${action==='invalidate'?'btn-danger':'btn-ghost'}`;button.textContent=label;addIcon(button,({extend:'clock',force_submit:'send',reopen:'unlock',dismiss_flag:'flagClear',invalidate:'ban'})[action]);
     button.addEventListener('click',async()=>{
       const questions={extend:`Add ${minutes} minutes to this student's overall deadline? Part timers are not extended.`,force_submit:'Submit the saved answers for this student? Unsaved changes may be lost.',invalidate:'Invalidate this attempt? It will be excluded from score statistics.',reopen:'Reopen this attempt? Saved answers remain, but manual grades are cleared. Existing part locks and part timers remain in effect. The student must check the original result tab.',dismiss_flag:'Clear the current flags? The event history will remain visible.'};
-      if(!confirm(questions[action]))return;controls.querySelectorAll('button').forEach(b=>b.disabled=true);
-      try {await api(`exams/${encodeURIComponent(examId)}/action`,{attemptId:attempt.attempt_id,action,...(minutes?{minutes}:{})}); await progress();if(selected===examId) await results();message('Student action saved.');}
+      if(!confirm(questions[action]))return;monitorActionPending++;controls.querySelectorAll('button').forEach(b=>b.disabled=true);
+      let saved=false;try {await api(`exams/${encodeURIComponent(examId)}/action`,{attemptId:attempt.attempt_id,action,...(minutes?{minutes}:{})});saved=true;}
       catch(err){message(err.message,true);controls.querySelectorAll('button').forEach(b=>b.disabled=false);}
+      finally {monitorActionPending--;}
+      if(saved){try {await progress();if(selected===examId) await results();message('Student action saved.');}catch(err){message('Student action saved, but the dashboard could not refresh: '+err.message,true);}}
+      else if(currentProgress && !monitorActionPending && !$('#progressRows').contains(document.activeElement)) renderMonitor(currentProgress);
     });controls.append(button);
   }
   details.append(controls);return details;
@@ -259,10 +265,10 @@ function renderMonitor(data) {
   for(const a of shown){
     const row=document.createElement('div');row.className=`neon-roster-row${a.integrity_count ? ' flagged' : ''}`;row.dataset.attempt=a.attempt_id;
     const avatar=document.createElement('div');avatar.className='avatar';let hue=0;for(const ch of (a.student_no||a.student_name))hue=(hue*31+ch.charCodeAt(0))%360;avatar.style.background=`hsl(${hue} 62% 52%)`;avatar.textContent=a.student_name.trim().split(/\s+/).slice(0,2).map(n=>n[0]).join('').toUpperCase();const dot=document.createElement('span');dot.className=`dot${a.recently_seen?' on':''}`;avatar.append(dot);
-    const person=document.createElement('div');person.className='neon-roster-person';const name=document.createElement('div');name.className='sname';name.textContent=a.student_name;const meta=document.createElement('div');meta.className='smeta';meta.textContent=[a.student_no,a.student_class,a.student_section,a.exam_title].filter(Boolean).join(' · ');person.append(name,meta);
+    const person=document.createElement('div');person.className='neon-roster-person';const name=document.createElement('div');name.className='sname';name.textContent=a.student_name;const meta=document.createElement('div');meta.className='smeta';meta.textContent=[a.student_no,a.student_class,a.student_section,a.exam_title].filter(Boolean).join(' · ');person.append(name,meta);if(!a.submitted_at && a.current_question){const position=document.createElement('div');position.className='smeta';position.textContent=`Last reported: ${a.current_part} · question ${a.current_question}`;person.append(position);}
     const deadline=document.createElement('div');deadline.className='neon-roster-time';const left=Math.max(0,Math.ceil((new Date(a.deadline).getTime()-Date.now())/1000));const clock=document.createElement('div');clock.className='time-left';clock.textContent=a.submitted_at?'Finished':`${Math.floor(left/60)}:${String(left%60).padStart(2,'0')}`;const timeLabel=document.createElement('div');timeLabel.className='smeta';timeLabel.textContent=a.submitted_at?'submitted':left?'remaining':'time expired';deadline.append(clock,timeLabel);
     const total=a.question_total ?? data.total;const progress=document.createElement('div');progress.className='progress-cell';const progressText=document.createElement('div');progressText.className='lab';progressText.textContent=`${a.answered} / ${total} saved`;const bar=document.createElement('div');bar.className='bar';const fill=document.createElement('span');fill.style.width=`${total?Math.min(100,Math.round(a.answered/total*100)):0}%`;bar.append(fill);progress.append(progressText,bar);
-    const flags=document.createElement('div');flags.className=a.integrity_count?'flag-chip':'smeta';flags.textContent=a.integrity_count?`⚑ ${a.integrity_count} flag${a.integrity_count===1?'':'s'}`:'No flags';
+    const flags=document.createElement('div');flags.className=a.integrity_count?'flag-chip':'smeta';flags.textContent=a.integrity_count?`${a.integrity_count} flag${a.integrity_count===1?'':'s'}`:'No flags';if(a.integrity_count)addIcon(flags,'flag');
     const state=a.completion_reason==='invalidated'?'Invalidated':a.submitted_at?(a.completion_reason==='force_submitted'?'Teacher submitted':a.completion_reason==='integrity_limit'?'Integrity limit':'Submitted'):left?'In progress':'Time expired';const pill=document.createElement('span');pill.className=`pill ${a.submitted_at?'pill-done':a.recently_seen?'pill-live':'pill-idle'}`;pill.textContent=state;const status=document.createElement('div');status.className='neon-roster-status';const presence=document.createElement('div');presence.className='smeta';presence.textContent=a.recently_seen?'Recently connected':'No recent heartbeat';status.append(pill,presence);
     const actions=actionControls(a,a.exam_id || selected);actions.open=expanded.has(a.attempt_id);row.append(avatar,person,deadline,progress,flags,status,actions);
     if(a.integrity_events?.length){const history=document.createElement('details');history.className='roster-events';history.open=expandedEvents.has(a.attempt_id);const heading=document.createElement('summary');heading.textContent=`View recent integrity events (${a.integrity_events.length})`;history.append(heading);const list=document.createElement('ul');for(const event of [...a.integrity_events].reverse().slice(0,20)){const item=document.createElement('li');item.textContent=`${eventLabel(event.type)} · ${new Date(event.at).toLocaleString()}`;list.append(item);}history.append(list);row.append(history);}rows.append(row);
@@ -272,6 +278,14 @@ function renderMonitor(data) {
   if(!visible.length){const empty=document.createElement('div');empty.className='feed-empty';empty.textContent='Integrity events and submissions will appear here as the dashboard refreshes.';feed.append(empty);}
   for(const event of visible){const row=document.createElement('div');row.className='feed-item info';const text=document.createElement('div');text.textContent=event.text;const when=document.createElement('div');when.className='feed-when';when.textContent=new Date(event.at).toLocaleString();text.append(when);row.append(text);feed.append(row);}
 }
+// Poll without replacing a control while a teacher is using it. Apply the
+// latest snapshot once focus has left the roster.
+$('#progressRows').addEventListener('focusout',()=>setTimeout(()=>{
+  if(currentProgress && !monitorActionPending && !$('#progressRows').contains(document.activeElement)) {
+    renderMonitor(currentProgress);
+    $('#progressStatus').textContent='Refreshes every 10 seconds. Browser signals are best-effort and are not proof of misconduct.';
+  }
+},0));
 $('#rosterSearch').addEventListener('input',()=>{if(currentProgress)renderMonitor(currentProgress);});
 $('#rosterScope').addEventListener('change',()=>{currentProgress=null;feedExam='';progress();});
 $('#rosterFilter').addEventListener('change',()=>{if(currentProgress)renderMonitor(currentProgress);});
@@ -302,46 +316,14 @@ async function progress() {
   try {
     const data = scope==='all' ? await api('progress-all') : await api(`exams/${encodeURIComponent(examId)}/progress`);
     if (generation !== progressGeneration || examId !== selected || scope!==$('#rosterScope').value || !token) return;
-    const feedScope=scope==='all'?'all':examId; currentProgress=data; if(feedExam!==feedScope){feedExam=feedScope;feedClearedAt=0;} renderMonitor(data);
+    const feedScope=scope==='all'?'all':examId; currentProgress=data; if(feedExam!==feedScope){feedExam=feedScope;feedClearedAt=0;} const interacting=monitorActionPending>0 || $('#progressRows').contains(document.activeElement); if(!interacting) renderMonitor(data);
     $('#connectionStatus').classList.remove('off'); $('#connectionStatus span').textContent='Updated';
-    $('#progressStatus').textContent = 'Refreshes every 10 seconds. Recent connection is based on a heartbeat, not proof of attention; browser signals are best-effort and are not proof of misconduct. Open a student’s recent events below.';
+    $('#progressStatus').textContent = interacting ? 'New data received. The student list will update when you finish using its controls.' : 'Refreshes every 10 seconds. Recent connection is based on a heartbeat, not proof of attention; browser signals are best-effort and are not proof of misconduct. Open a student’s recent events below.';
   } catch (err) {
     if (generation === progressGeneration && examId === selected && token) { $('#connectionStatus').classList.add('off'); $('#connectionStatus span').textContent='Disconnected'; $('#progressStatus').textContent = `Could not refresh progress: ${err.message}`; }
   }
 }
 async function showDashboard() { const me = await api('me'); $('#auth').classList.add('hidden'); $('#dashboard').classList.remove('hidden'); $('#welcome').textContent = `Teacher dashboard · ${me.username}`; await exams(); await progress(); clearInterval(progressTimer); progressTimer = setInterval(() => { if (!document.hidden) progress(); }, 10000); }
-const detailFields={school:'#detailSchool',subject:'#detailSubject',term:'#detailTerm',instructions:'#detailInstructions',proctor_notes:'#detailNotes'};
-function detailValues(){return Object.fromEntries(Object.entries(detailFields).map(([key,selector])=>[key,$(selector).value]));}
-async function loadDetails(force=false) {
-  const examId=selected;if(!force && detailsDirty && loadedDetailsExam===examId)return;
-  if(force && detailsDirty && !confirm('Discard unsaved exam details and reload?'))return;
-  const generation=++detailsGeneration;detailsDirty=false;loadedDetailsExam=examId;detailsRevision='';for(const selector of Object.values(detailFields))$(selector).disabled=true;$('#saveDetails').disabled=true;$('#regenerateCode').disabled=true;$('#detailsStatus').textContent=examId?'Loading details…':'Select an exam.';
-  if(!examId)return;
-  try{const data=await api(`exams/${encodeURIComponent(examId)}/details`);if(generation!==detailsGeneration || selected!==examId)return;for(const [key,selector] of Object.entries(detailFields)){$(selector).value=data[key];$(selector).disabled=false;}detailsRevision=data.revision;$('#detailsStatus').textContent='Details loaded for selected exam.';$('#saveDetails').disabled=false;$('#regenerateCode').disabled=false;}
-  catch(err){if(generation===detailsGeneration)$('#detailsStatus').textContent=err.message;}
-}
-$('#detailsForm').addEventListener('input',()=>{detailsDirty=true;$('#detailsStatus').textContent='Unsaved exam details.';});
-$('#detailsForm').addEventListener('submit',async e=>{e.preventDefault();const examId=selected,button=$('#saveDetails'),values=detailValues(),revision=detailsRevision;if(!examId||!revision)return;button.disabled=true;
-  try{const data=await api(`exams/${encodeURIComponent(examId)}/details`,{...values,revision});if(examId===selected && revision===detailsRevision){detailsRevision=data.revision;detailsDirty=JSON.stringify(detailValues())!==JSON.stringify(values);$('#detailsStatus').textContent=detailsDirty?'Earlier values saved; newer changes are not saved.':'Exam details saved.';}message('Exam details saved.');}
-  catch(err){if(examId===selected)$('#detailsStatus').textContent=err.message;message(err.message,true);}finally{if(examId===selected)button.disabled=false;}
-});
-$('#editDetailsBank').addEventListener('click',()=>document.querySelector('[data-view=questions]').click());
-$('#reloadDetails').addEventListener('click',()=>loadDetails(true));
-$('#regenerateCode').addEventListener('click',async e=>{const examId=selected,button=e.currentTarget;if(!examId || !confirm('Generate a new code? The old code will no longer work for joining or checking results. Share the new code with students.'))return;button.disabled=true;
-  try{const data=await api(`exams/${encodeURIComponent(examId)}/new-code`,{});await exams();message(`New access code: ${data.code}`);}catch(err){message(err.message,true);}finally{if(examId===selected)button.disabled=false;}
-});
-async function loadIntegritySettings() {
-  const examId=selected;if(integrityDirty && loadedIntegrityExam===examId)return;const generation=++integrityGeneration;integrityDirty=false;loadedIntegrityExam=examId;$('#maxViolations').disabled=true;$('#autoSubmitViolations').disabled=true;$('#saveIntegrity').disabled=true;$('#integrityStatus').textContent=examId?'Loading settings…':'Select an exam to configure the limit.';
-  if(!examId)return;
-  try {const settings=await api(`exams/${encodeURIComponent(examId)}/integrity-settings`);if(generation!==integrityGeneration || examId!==selected)return;$('#maxViolations').value=settings.max_violations;$('#autoSubmitViolations').checked=settings.auto_submit_on_violations;$('#maxViolations').disabled=false;$('#autoSubmitViolations').disabled=false;$('#integrityStatus').textContent='Settings loaded for the selected exam.';$('#saveIntegrity').disabled=false;}
-  catch(err){if(generation===integrityGeneration)$('#integrityStatus').textContent=err.message;}
-}
-$('#integritySettings').addEventListener('input',()=>{integrityDirty=true;});
-$('#integritySettings').addEventListener('submit',async e=>{e.preventDefault();const examId=selected,button=$('#saveIntegrity'),maxViolations=Number($('#maxViolations').value),autoSubmit=$('#autoSubmitViolations').checked;
-  if(!examId || !Number.isInteger(maxViolations) || maxViolations<0 || maxViolations>500 || (autoSubmit && !maxViolations))return message('Choose a limit from 1 to 500 for auto-submit, or 0 to disable the limit.',true);
-  if(autoSubmit && !confirm('Enable auto-submit when the integrity limit is reached? Browser checks can be unreliable, and unsaved answers may be lost.'))return;
-  button.disabled=true;try{await api(`exams/${encodeURIComponent(examId)}/integrity-settings`,{maxViolations,autoSubmit});if(examId===selected){integrityDirty=Number($('#maxViolations').value)!==maxViolations || $('#autoSubmitViolations').checked!==autoSubmit;$('#integrityStatus').textContent=integrityDirty?'Saved earlier values; newer changes are not saved.':'Integrity settings saved.';}message('Integrity settings saved.');}catch(err){message(err.message,true);}finally{if(examId===selected)button.disabled=false;}
-});
 $('#setupNewExam').addEventListener('click',()=>$('#newExam').click());
 $('#changePassword').addEventListener('submit',async e=>{e.preventDefault();const button=e.currentTarget.querySelector('button');button.disabled=true;try{await api('password',{current:$('#currentPassword').value,next:$('#nextPassword').value});$('#currentPassword').value='';$('#nextPassword').value='';message('Password changed. Other teacher sessions were signed out.');}catch(err){message(err.message,true);}finally{button.disabled=false;}});
 $('#login').addEventListener('submit', async e => { e.preventDefault(); const b = e.currentTarget.querySelector('[type=submit]'); b.disabled = true; try { const r = await api('login', { username:$('#username').value.trim(), password:$('#password').value }); token = r.token; sessionStorage.setItem('simple_teacher_token',token); $('#password').value = ''; await showDashboard(); message('Signed in.'); } catch(err) { message(err.message,true); } finally { b.disabled = false; } });
@@ -352,18 +334,15 @@ $('#copyCode').addEventListener('click',async()=>{const code=$('#codeText').text
 $('#logout').addEventListener('click', async () => { try { await api('logout', {}); } catch {} sessionStorage.removeItem('simple_teacher_token'); token = ''; selected = ''; currentProgress=null; currentResults=null; resultsGeneration++; progressGeneration++; clearInterval(progressTimer); newDraft(); $('#importText').value = ''; $('#importPreview').replaceChildren(); $('#dashboard').classList.add('hidden'); $('#auth').classList.remove('hidden'); message('Signed out.'); });
 $('#examSelect').addEventListener('change', e => {
   const editing=!$('#questionsView').classList.contains('hidden');
-  if(!$('#setupView').classList.contains('hidden') && detailsDirty && !confirm('Discard unsaved exam details and switch exams?')){e.target.value=selected;return;}
-  if(!$('#setupView').classList.contains('hidden') && integrityDirty && !confirm('Discard unsaved integrity settings and switch exams?')){e.target.value=selected;return;}
   if(editing && (draftDirty || textDirty) && !confirm('Discard unsaved question-bank changes and switch exams?')) { e.target.value=selected; return; }
   currentProgress=null; $('#progressRows').textContent='Loading saved progress…'; $('#activityFeed').replaceChildren(); selected=e.target.value; editorGeneration++; showSelection(); $('#progressRows').textContent='Loading saved progress…'; progress(); results().catch(err=>message(err.message,true));
-  if(!$('#setupView').classList.contains('hidden')) {loadIntegritySettings();loadDetails();}
   if(editing && selected) loadBank({confirmed:true}).catch(err=>message(err.message,true));
 });
 $('#newExam').addEventListener('click', () => { if ((draftDirty || textDirty) && !confirm('Discard unsaved pasted text and question edits and start a new exam?')) return; newDraft(); view('questions'); });
 $('#loadBank').addEventListener('click', () => loadBank().catch(err => message(err.message,true)));
 $('#showFormat').addEventListener('click', () => $('#formatHelp').classList.toggle('hidden'));
 $('#create').addEventListener('input', () => { dirty(); counts(); }); $('#create').addEventListener('change', () => { dirty(); counts(); });
-document.querySelectorAll('[data-view]').forEach(tab => tab.addEventListener('click', () => { view(tab.dataset.view); if (tab.dataset.view === 'setup') {loadIntegritySettings();loadDetails();} if (tab.dataset.view === 'overview') progress(); if (tab.dataset.view === 'results') results().catch(err => message(err.message,true)); if (tab.dataset.view === 'questions' && selected && selected !== editExamId) loadBank().catch(err => message(err.message,true)); }));
+document.querySelectorAll('[data-view]').forEach(tab => tab.addEventListener('click', () => { view(tab.dataset.view); if (tab.dataset.view === 'overview') progress(); if (tab.dataset.view === 'results') results().catch(err => message(err.message,true)); if (tab.dataset.view === 'questions' && selected && selected !== editExamId) loadBank().catch(err => message(err.message,true)); }));
 $('#refreshExams').addEventListener('click', () => exams().catch(err => message(err.message,true)));
 $('#addQuestion').addEventListener('click', () => { editor(); dirty(); });
 $('#addPart').addEventListener('click', () => { const p=part(); editor(null,p); dirty(); }); $('#refreshResults').addEventListener('click', () => results().catch(err => message(err.message,true)));
@@ -421,4 +400,10 @@ $('#create').addEventListener('submit', async e => {
   } catch(err) { message(err.message,true); }
   finally { controls.forEach(c => { c.disabled = false; }); button.disabled = bankLocked; }
 });
+for(const [selector,icon] of Object.entries({
+  '[data-view=overview]':'list','[data-view=results]':'chart','[data-view=questions]':'book','[data-view=setup]':'settings',
+  '#newExam':'plus','#setupNewExam':'plus','#refreshExams':'refresh','#refreshResults':'refresh','#loadBank':'refresh',
+  '#showFormat':'help','#addPart':'plus','#addQuestion':'plus','#previewImport':'eye','#exportCsv':'download',
+  '#releaseResults':'eye','#clearFeed':'trash','#logout':'logout','#copyCode':'copy','#login button':'send','#register':'plus','#showRegister':'plus','#showLogin':'left','#changePassword button':'key'
+})) addIcon($(selector),icon);
 newDraft(); if (token) showDashboard().catch(e => { token = ''; sessionStorage.removeItem('simple_teacher_token'); message(e.message,true); });
