@@ -180,7 +180,14 @@ function encodePostgrestInValue(value) {
   return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
-export function createSupabaseRestStore({ url, key, fetchImpl = globalThis.fetch }) {
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export function createSupabaseRestStore({
+  url,
+  key,
+  fetchImpl = globalThis.fetch,
+  clockSkewDelaysMs = [1200, 1800, 2500, 3500]
+}) {
   const baseUrl = url.replace(/\/+$/, '') + '/rest/v1';
   const authHeaders = { apikey: key };
   // Legacy service_role keys are JWTs and use Bearer auth; new sb_secret_* keys
@@ -190,47 +197,66 @@ export function createSupabaseRestStore({ url, key, fetchImpl = globalThis.fetch
   }
 
   async function request(pathAndQuery, { method = 'GET', headers = {}, body } = {}) {
-    const res = await fetchImpl(`${baseUrl}${pathAndQuery}`, {
-      method,
-      headers: {
-        Accept: 'application/json',
-        ...authHeaders,
-        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-        ...headers
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(20_000)
-    });
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetchImpl(`${baseUrl}${pathAndQuery}`, {
+        method,
+        headers: {
+          Accept: 'application/json',
+          ...authHeaders,
+          ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+          ...headers
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(20_000)
+      });
 
-    if (!res.ok) {
-      let detail = `HTTP ${res.status}`;
-      let code = '';
-      try {
-        const errJson = await res.json();
-        code = String(errJson?.code || '');
-        detail = errJson?.message || errJson?.error || detail;
-      } catch {
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        let code = '';
         try {
-          const txt = await res.text();
-          if (txt) detail = txt.slice(0, 200);
-        } catch { /* ignore */ }
-      }
-      if (code === '42P01' || code === 'PGRST205') {
-        throw new Error(
-          `Supabase table missing (${detail}). Run supabase/schema.sql in your Supabase SQL Editor.`
-        );
-      }
-      if (res.status === 401 || res.status === 403 || code === '42501') {
-        throw new Error(
-          `Supabase rejected credentials (${detail}). Ensure SUPABASE_SERVICE_ROLE_KEY is your service_role / secret key.`
-        );
-      }
-      throw new Error(`Supabase REST ${method} failed: ${detail}`);
-    }
+          const errJson = await res.json();
+          code = String(errJson?.code || '');
+          detail = errJson?.message || errJson?.error || detail;
+        } catch {
+          try {
+            const txt = await res.text();
+            if (txt) detail = txt.slice(0, 200);
+          } catch { /* ignore */ }
+        }
 
-    if (res.status === 204) return null;
-    const text = await res.text();
-    return text ? JSON.parse(text) : null;
+        // Supabase's API gateway mints short-lived JWTs for `sb_secret_*` keys;
+        // if the edge gateway clock is ~1-2s ahead of the database container,
+        // PostgREST transiently returns 401 "JWT issued at future" until the DB
+        // clock catches up to the cached token's `iat`.
+        const isFutureJwt = /JWT issued at future/i.test(detail);
+        if (isFutureJwt && attempt < clockSkewDelaysMs.length) {
+          await sleep(clockSkewDelaysMs[attempt]);
+          continue;
+        }
+        if (isFutureJwt) {
+          throw new Error(
+            'Supabase rejected the key with "JWT issued at future" (Supabase gateway clock skew on sb_secret_* keys). ' +
+            'Use your legacy service_role JWT key (starts with eyJ..., under Supabase Project Settings -> API Keys -> Legacy API keys) for SUPABASE_SERVICE_ROLE_KEY, or set DATABASE_URL.'
+          );
+        }
+
+        if (code === '42P01' || code === 'PGRST205') {
+          throw new Error(
+            `Supabase table missing (${detail}). Run supabase/schema.sql in your Supabase SQL Editor.`
+          );
+        }
+        if (res.status === 401 || res.status === 403 || code === '42501') {
+          throw new Error(
+            `Supabase rejected credentials (${detail}). Ensure SUPABASE_SERVICE_ROLE_KEY is your service_role / secret key.`
+          );
+        }
+        throw new Error(`Supabase REST ${method} failed: ${detail}`);
+      }
+
+      if (res.status === 204) return null;
+      const text = await res.text();
+      return text ? JSON.parse(text) : null;
+    }
   }
 
   async function selectAll(table, orderSpec) {
@@ -287,11 +313,13 @@ export function createSupabaseRestStore({ url, key, fetchImpl = globalThis.fetch
   }
 
   async function loadAll() {
+    // Run one lightweight query first so Supabase's edge gateway warms/caches
+    // any `sb_secret_*` token before parallel table reads begin.
+    const settings = await selectAll('settings', 'key.asc');
     const [
       teachers,
       teacher_tokens,
       exams,
-      settings,
       sections,
       questions,
       sessions,
@@ -300,7 +328,6 @@ export function createSupabaseRestStore({ url, key, fetchImpl = globalThis.fetch
       selectAll('teachers', 'id.asc'),
       selectAll('teacher_tokens', 'created_at.asc'),
       selectAll('exams', 'created_at.asc,id.asc'),
-      selectAll('settings', 'key.asc'),
       selectAll('sections', 'ord.asc,id.asc'),
       selectAll('questions', 'ord.asc,id.asc'),
       selectAll('sessions', 'created_at.asc,token.asc'),
