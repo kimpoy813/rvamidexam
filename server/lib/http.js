@@ -180,7 +180,7 @@ export function serveStatic(res, rootDir, pathname) {
   res.writeHead(200, {
     'Content-Type': MIME[ext] || 'application/octet-stream',
     'Content-Length': body.length,
-    'Cache-Control': 'no-cache'
+    'Cache-Control': 'no-store, no-cache, must-revalidate'
   });
   res.end(body);
   return true;

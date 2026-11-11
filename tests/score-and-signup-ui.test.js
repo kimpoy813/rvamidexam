@@ -147,6 +147,16 @@ test('student score lookup formats codes, auto-opens from hash, and renders stru
 
   const doc = dom.window.document;
   assert.equal(doc.querySelector('#scoreLookupPanel').open, true, 'hash #scoreLookupPanel should auto-open');
+  assert.equal(doc.querySelector('#scoreLookupPanel').classList.contains('hidden'), false);
+  assert.equal(doc.querySelector('#checkInPane').classList.contains('hidden'), true);
+  assert.equal(doc.querySelector('#entryTabScore').getAttribute('aria-pressed'), 'true');
+
+  // Switch back to check-in and reopen via the bottom quick-launch card.
+  doc.querySelector('#backToCheckin').click();
+  assert.equal(doc.querySelector('#checkInPane').classList.contains('hidden'), false);
+  assert.equal(doc.querySelector('#scoreLookupPanel').classList.contains('hidden'), true);
+  doc.querySelector('#openScoreLookup').click();
+  assert.equal(doc.querySelector('#scoreLookupPanel').classList.contains('hidden'), false);
 
   // Verify ABC -> ABC- formatting on #lookupCode.
   const codeInput = doc.querySelector('#lookupCode');
@@ -162,7 +172,7 @@ test('student score lookup formats codes, auto-opens from hash, and renders stru
   assert.ok(doc.querySelector('#lookupResult .score-card.is-error'), 'unreleased score should render error card');
   assert.match(doc.querySelector('#lookupResult').textContent, /No released score/);
 
-  // Release results and verify structured score card.
+  // Release results and verify structured score card + circular ring + hide button.
   await realFetch(`${BASE}/api/teacher/settings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Teacher-Token': loginRes.token },
@@ -175,9 +185,15 @@ test('student score lookup formats codes, auto-opens from hash, and renders stru
   const card = doc.querySelector('#lookupResult .score-card');
   assert.ok(card, 'released score should render structured .score-card');
   assert.ok(card.classList.contains('is-provisional') || card.classList.contains('is-ok'), `got card: ${card.className} -> ${card.textContent}`);
+  assert.ok(card.querySelector('.score-mini-ring svg'), 'released score should render circular SVG score ring');
   assert.match(card.querySelector('.score-card-title').textContent, /Final Examination/);
   assert.match(card.querySelector('.score-card-points').textContent, /\/\s*50\s*pts/);
   assert.match(card.querySelector('.score-card-pct').textContent, /%/);
+
+  // Privacy hide button clears score and student ID from shared screens.
+  card.querySelector('.score-hide-btn').click();
+  assert.equal(doc.querySelector('#lookupResult').textContent, '');
+  assert.equal(doc.querySelector('#lookupNumber').value, '');
 });
 
 test('teacher sign-up UI switches modes, validates live password checks, toggles visibility, and registers an account', async () => {
