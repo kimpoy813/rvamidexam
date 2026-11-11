@@ -190,8 +190,4 @@
   .teacher-actions summary { min-height:44px; }
   .teacher-actions .row .btn { flex:1 1 130px; min-height:44px; }
 }
-.result-lookup-panel { margin:20px auto 0; max-width:390px; text-align:left; border:1px solid var(--line); border-radius:14px; padding:14px 16px; background:var(--surface-2); }
-.result-lookup-panel summary { cursor:pointer; font-weight:700; color:var(--brand-dark); }
-.result-lookup-panel p { margin-top:8px; }
-.result-lookup-panel form { margin-top:12px; }
-.result-lookup-panel button { margin-top:12px; }
+.result-lookup-panel { margin:20px auto 0; max-width:440px; text-align:left; border:1px solid var(--line); border-radius:16px; padding:16px 18px; }

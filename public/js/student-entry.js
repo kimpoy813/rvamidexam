@@ -81,10 +81,15 @@ const agree = $('#fAgree');
 const startBtn = $('#startBtn');
 agree.addEventListener('change', () => { startBtn.disabled = !agree.checked || !info?.examOpen; });
 
+function formatAccessCodeInput(input, e) {
+  const v = input.value.toUpperCase().replace(/[^A-Z0-9-]/g, '');
+  const deleting = e?.inputType && e.inputType.startsWith('delete');
+  input.value = v.length === 3 && !v.includes('-') && !deleting ? v + '-' : v;
+}
+
 let codeTimer;
 $('#fCode').addEventListener('input', (e) => {
-  const v = e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, '');
-  e.target.value = v.length === 3 && !v.includes('-') ? v + '-' : v;
+  formatAccessCodeInput(e.target, e);
   clearTimeout(codeTimer);
   infoRequest++; // Invalidate any request for a previous code.
   info = null;
@@ -127,24 +132,146 @@ $('#joinForm').addEventListener('submit', async (e) => {
 });
 
 let lookupGeneration = 0;
-if (location.hash === '#scoreLookupPanel') $('#scoreLookupPanel').open = true;
+const lookupPanel = $('#scoreLookupPanel');
 const lookupForm = $('#scoreLookup');
+const lookupCodeInput = $('#lookupCode');
+const lookupNumberInput = $('#lookupNumber');
 const lookupResult = $('#lookupResult');
-lookupForm.addEventListener('input', () => { lookupGeneration++; lookupResult.textContent = ''; });
+
+function prefillScoreLookup() {
+  if (!lookupCodeInput.value && $('#fCode')?.value.trim()) {
+    lookupCodeInput.value = $('#fCode').value.trim().toUpperCase();
+  }
+  if (!lookupNumberInput.value) {
+    const savedNo = $('#fNo')?.value.trim() || sessionStorage.getItem('rvm_no') || '';
+    if (savedNo) lookupNumberInput.value = savedNo;
+  }
+}
+
+function openScoreLookupFromHash() {
+  if (location.hash === '#scoreLookupPanel') {
+    lookupPanel.open = true;
+    prefillScoreLookup();
+    lookupPanel.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+    (lookupCodeInput.value ? lookupNumberInput : lookupCodeInput).focus?.();
+  }
+}
+
+lookupPanel.addEventListener('toggle', () => {
+  if (lookupPanel.open) prefillScoreLookup();
+});
+window.addEventListener('hashchange', openScoreLookupFromHash);
+openScoreLookupFromHash();
+
+lookupCodeInput.addEventListener('input', (e) => formatAccessCodeInput(e.target, e));
+
+function renderLookupLoading() {
+  const card = document.createElement('div');
+  card.className = 'score-card is-loading';
+  const pulse = document.createElement('span');
+  pulse.className = 'score-card-pulse';
+  pulse.setAttribute('aria-hidden', 'true');
+  const label = document.createElement('span');
+  label.textContent = 'Checking released score…';
+  card.append(pulse, label);
+  lookupResult.replaceChildren(card);
+}
+
+function renderLookupError(message) {
+  const card = document.createElement('div');
+  card.className = 'score-card is-error';
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('viewBox', '0 0 24 24');
+  icon.setAttribute('fill', 'none');
+  icon.setAttribute('stroke', 'currentColor');
+  icon.setAttribute('stroke-width', '2');
+  icon.setAttribute('stroke-linecap', 'round');
+  icon.setAttribute('stroke-linejoin', 'round');
+  icon.setAttribute('aria-hidden', 'true');
+  for (const d of ['M12 8v4', 'M12 16h.01', 'M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z']) {
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', d);
+    icon.append(p);
+  }
+  const text = document.createElement('span');
+  text.textContent = message;
+  card.append(icon, text);
+  lookupResult.replaceChildren(card);
+}
+
+function renderLookupSuccess(result) {
+  const max = Number(result.max) || 0;
+  const score = Number(result.score) || 0;
+  const pending = Number(result.pending) || 0;
+  const pct = max > 0 ? Math.max(0, Math.min(100, Math.round((score / max) * 100))) : 0;
+
+  const card = document.createElement('div');
+  card.className = `score-card ${pending ? 'is-provisional' : 'is-ok'}`;
+
+  const top = document.createElement('div');
+  top.className = 'score-card-top';
+  const title = document.createElement('strong');
+  title.className = 'score-card-title';
+  title.textContent = result.title || 'Examination';
+  const pill = document.createElement('span');
+  pill.className = `pill ${pending ? 'pill-warn' : 'pill-live'}`;
+  const dot = document.createElement('span');
+  dot.className = 'pill-dot';
+  pill.append(dot, document.createTextNode(pending ? 'Provisional' : 'Released'));
+  top.append(title, pill);
+
+  const main = document.createElement('div');
+  main.className = 'score-card-main';
+  const points = document.createElement('div');
+  points.className = 'score-card-points';
+  points.append(document.createTextNode(`${score} / ${max} `));
+  const unit = document.createElement('span');
+  unit.textContent = 'pts';
+  points.append(unit);
+  const pctEl = document.createElement('div');
+  pctEl.className = 'score-card-pct';
+  pctEl.textContent = `${pct}%`;
+  main.append(points, pctEl);
+
+  const bar = document.createElement('div');
+  bar.className = `bar ${pending ? 'warn' : 'ok'}`;
+  bar.setAttribute('aria-hidden', 'true');
+  const fill = document.createElement('span');
+  fill.style.width = `${pct}%`;
+  bar.append(fill);
+
+  card.append(top, main, bar);
+
+  if (pending) {
+    const foot = document.createElement('div');
+    foot.className = 'score-card-foot';
+    foot.textContent = `${pending} points awaiting grading; score is provisional.`;
+    card.append(foot);
+  }
+
+  lookupResult.replaceChildren(card);
+}
+
+lookupForm.addEventListener('input', () => {
+  lookupGeneration++;
+  lookupResult.replaceChildren();
+});
 lookupForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const generation = ++lookupGeneration;
-  const button = lookupForm.querySelector('button');
+  const button = lookupForm.querySelector('[type="submit"]');
   button.disabled = true;
-  lookupResult.textContent = 'Checking…';
+  renderLookupLoading();
   try {
-    const result = await api('/api/public/result-lookup', { method:'POST', body: {
-      code: $('#lookupCode').value, number: $('#lookupNumber').value
+    const result = await api('/api/public/result-lookup', { method: 'POST', body: {
+      code: lookupCodeInput.value, number: lookupNumberInput.value
     }});
-    if (generation === lookupGeneration) lookupResult.textContent = `${result.title}: ${result.score} / ${result.max}${result.pending ? ` (${result.pending} points awaiting grading; score is provisional)` : ''}`;
+    if (generation === lookupGeneration) renderLookupSuccess(result);
   } catch (err) {
-    if (generation === lookupGeneration) lookupResult.textContent = err.message;
-  } finally { button.disabled = false; }
+    if (generation === lookupGeneration) renderLookupError(err.message);
+  } finally {
+    button.disabled = false;
+  }
 });
 
 loadInfo();

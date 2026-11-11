@@ -195,7 +195,9 @@ a:hover { text-decoration: underline; }
 }
 .field .hint { font-size: 12px; color: var(--muted); margin-top: 5px; }
 
-input[type=text], input[type=password], input[type=number], select, textarea {
+input:not([type]), input[type=text], input[type=password], input[type=number],
+input[type=search], input[type=email], input[type=tel], input[type=url],
+select, textarea {
   width: 100%;
   font: inherit;
   font-size: 15px;
@@ -204,7 +206,7 @@ input[type=text], input[type=password], input[type=number], select, textarea {
   border: 1.5px solid var(--line);
   border-radius: 11px;
   padding: 11px 13px;
-  transition: border-color .15s ease, box-shadow .15s ease;
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
 }
 input:focus, select:focus, textarea:focus {
   outline: none;
@@ -496,3 +498,418 @@ input, select, textarea { max-width: 100%; }
 
 /* Render action icons inherit each control's theme and leave text visible. */
 button .action-icon { width: 1em; height: 1em; flex: 0 0 1em; vertical-align: -0.15em; margin-right: .4em; pointer-events: none; }
+.btn .action-icon, .tab .action-icon { margin-right: 0; }
+#nextBtn .action-icon[data-icon="right"], #startBtn .action-icon[data-icon="right"] { order: 1; }
+
+/* ----------------------------------------------------- input & form extras */
+
+.input-code-sm {
+  font-family: var(--mono);
+  font-size: 15px !important;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.input-wrap > input {
+  padding-right: 44px;
+}
+.pw-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background .14s ease, color .14s ease;
+}
+.pw-toggle:hover { background: var(--surface-2); color: var(--ink); }
+.pw-toggle:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.pw-toggle svg { width: 17px; height: 17px; pointer-events: none; }
+
+.form-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  border: 1px solid #fecdd3;
+  background: #fff1f2;
+  color: #9f1239;
+}
+.form-alert.ok {
+  border-color: #a7f3d0;
+  background: #ecfdf5;
+  color: #065f46;
+}
+.form-alert svg {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  margin-top: 1px;
+}
+.form-alert:empty { display: none; }
+
+/* ------------------------------------------- student released score lookup */
+
+.score-lookup {
+  border-top: 1px solid var(--line);
+  background: linear-gradient(180deg, #fafbfe 0%, #f5f7fc 100%);
+}
+.score-lookup details > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.score-lookup details > summary::-webkit-details-marker { display: none; }
+
+.score-lookup-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 2px;
+  border-radius: 12px;
+  transition: color .15s ease;
+}
+.score-lookup-summary:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 4px;
+}
+.score-lookup-badge {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  background: #eef2ff;
+  border: 1px solid #dbe2fe;
+  color: var(--brand);
+  display: grid;
+  place-items: center;
+  flex: none;
+  transition: background .16s ease, transform .16s ease;
+}
+.score-lookup-badge svg { width: 19px; height: 19px; }
+.score-lookup details[open] .score-lookup-badge,
+.score-lookup-summary:hover .score-lookup-badge {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+.score-lookup-copy {
+  flex: 1;
+  min-width: 0;
+}
+.score-lookup-title {
+  display: block;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -.01em;
+}
+.score-lookup-sub {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-top: 1px;
+}
+.score-lookup-chevron {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  flex: none;
+  transition: transform .2s cubic-bezier(.4, 0, .2, 1), border-color .15s ease, color .15s ease;
+}
+.score-lookup-chevron svg { width: 15px; height: 15px; }
+.score-lookup details[open] .score-lookup-chevron {
+  transform: rotate(180deg);
+  color: var(--brand);
+  border-color: #c7d2fe;
+}
+
+.score-lookup-body {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+.score-lookup-note {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.score-lookup-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 11px;
+  margin-top: 12px;
+}
+.score-lookup-grid .field + .field { margin-top: 0; }
+.score-lookup-submit { margin-top: 12px; }
+
+.score-lookup-output { margin-top: 12px; }
+.score-lookup-output:empty { display: none; }
+
+.score-card {
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  padding: 14px 15px;
+  box-shadow: var(--shadow-sm);
+  animation: score-fade .18s ease;
+}
+@keyframes score-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.score-card.is-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 600;
+  background: var(--surface);
+}
+.score-card-pulse {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--brand);
+  animation: pulse 1.1s infinite ease-in-out;
+  flex: none;
+}
+.score-card.is-ok {
+  border-color: #c7d2fe;
+  background: linear-gradient(180deg, #ffffff 0%, #f8faff 100%);
+}
+.score-card.is-provisional {
+  border-color: #fde68a;
+  background: linear-gradient(180deg, #ffffff 0%, #fffdf5 100%);
+}
+.score-card.is-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-color: #fecdd3;
+  background: #fff1f2;
+  color: #9f1239;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.score-card.is-error svg {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  margin-top: 1px;
+}
+.score-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.score-card-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.score-card-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+}
+.score-card-points {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -.03em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.score-card-points span {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.score-card-pct {
+  font-size: 14px;
+  font-weight: 750;
+  color: var(--brand-dark);
+  font-variant-numeric: tabular-nums;
+}
+.score-card .bar { margin-top: 9px; height: 6px; }
+.score-card-foot {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-2);
+  font-size: 12px;
+  color: #92400e;
+  font-weight: 550;
+  line-height: 1.45;
+}
+
+@media (max-width: 520px) {
+  .score-lookup-grid { grid-template-columns: 1fr; }
+}
+
+/* ------------------------------------------------- teacher auth & sign-up */
+
+.auth-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.auth-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-top: 18px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.auth-mode-btn {
+  appearance: none;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 650;
+  padding: 9px 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+}
+.auth-mode-btn:hover { color: var(--ink); }
+.auth-mode-btn[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+.auth-mode-btn:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+
+.pw-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.pw-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  transition: all .15s ease;
+}
+.pw-check i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .55;
+}
+.pw-check.met {
+  background: var(--ok-soft);
+  border-color: #a7f3d0;
+  color: #065f46;
+}
+.pw-check.met i { opacity: 1; background: var(--ok); }
+.pw-check.bad {
+  background: var(--bad-soft);
+  border-color: #fecdd3;
+  color: #9f1239;
+}
+.pw-check.bad i { opacity: 1; background: var(--bad); }
+.field .hint.is-bad { color: #be123c; font-weight: 550; }
+
+.auth-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 16px;
+  padding: 11px 13px;
+  border-radius: 11px;
+  background: #f5f7ff;
+  border: 1px solid #e0e7ff;
+  color: #3730a3;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.auth-note svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-top: 1px;
+  color: var(--brand);
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0 10px;
+  color: var(--muted-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.auth-foot {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-2);
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.auth-foot a {
+  color: var(--brand-dark);
+  font-weight: 650;
+  text-decoration: none;
+}
+.auth-foot a:hover { text-decoration: underline; }
+

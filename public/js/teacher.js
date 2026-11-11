@@ -64,6 +64,10 @@ async function init() {
 function showLogin() {
   $('#loginView').classList.remove('hidden');
   $('#appView').classList.add('hidden');
+  const params = new URLSearchParams(location.search);
+  if (location.hash === '#register' || params.get('mode') === 'register') {
+    setAuthMode('register', { focus: false });
+  }
   disconnect();
 }
 
@@ -217,35 +221,168 @@ $('#examSelect').addEventListener('change', (e) => switchExam(e.target.value));
 $('#newExamBtn').addEventListener('click', newExam);
 $('#newExamBtn2').addEventListener('click', newExam);
 
-$('#showRegister').addEventListener('click', () => {
-  $('#authTitle').textContent = 'Create teacher account';
-  $('#loginForm').classList.add('hidden');
-  $('#showRegister').classList.add('hidden');
-  $('#registerForm').classList.remove('hidden');
-  $('#rUser').focus();
+const EYE_OPEN_PATHS = ['M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z', 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z'];
+const EYE_OFF_PATHS = ['M10.7 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a16.8 16.8 0 0 1-2.4 3.4', 'M6.6 6.6A16.5 16.5 0 0 0 2 12s3.5 7 10 7a10.2 10.2 0 0 0 5.4-1.6', 'M9.9 9.9a3 3 0 0 0 4.2 4.2', 'M3 3l18 18'];
+
+function setPwToggleIcon(svg, visible) {
+  if (!svg) return;
+  svg.replaceChildren();
+  for (const d of (visible ? EYE_OFF_PATHS : EYE_OPEN_PATHS)) {
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', d);
+    svg.append(p);
+  }
+}
+
+$$('.pw-toggle').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const input = document.getElementById(btn.dataset.pwTarget);
+    if (!input) return;
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    if (btn.dataset.pwSync) {
+      const synced = document.getElementById(btn.dataset.pwSync);
+      if (synced) synced.type = show ? 'text' : 'password';
+    }
+    const label = show ? 'Hide password' : 'Show password';
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('title', label);
+    setPwToggleIcon(btn.querySelector('svg'), show);
+  });
 });
-$('#showLogin').addEventListener('click', () => {
-  $('#authTitle').textContent = 'Teacher sign in';
-  $('#registerForm').classList.add('hidden');
-  $('#loginForm').classList.remove('hidden');
-  $('#showRegister').classList.remove('hidden');
-  $('#lUser').focus();
+
+function setAuthAlert(msg = '', kind = 'bad') {
+  const el = $('#authAlert');
+  if (!el) return;
+  if (!msg) {
+    el.classList.add('hidden');
+    el.classList.remove('ok');
+    el.replaceChildren();
+    return;
+  }
+  el.classList.remove('hidden');
+  el.classList.toggle('ok', kind === 'ok');
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('viewBox', '0 0 24 24');
+  icon.setAttribute('fill', 'none');
+  icon.setAttribute('stroke', 'currentColor');
+  icon.setAttribute('stroke-width', '2');
+  icon.setAttribute('stroke-linecap', 'round');
+  icon.setAttribute('stroke-linejoin', 'round');
+  icon.setAttribute('aria-hidden', 'true');
+  const paths = kind === 'ok'
+    ? ['M20 6L9 17l-5-5']
+    : ['M12 8v4', 'M12 16h.01', 'M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z'];
+  for (const d of paths) {
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', d);
+    icon.append(p);
+  }
+  const text = document.createElement('span');
+  text.textContent = msg;
+  el.replaceChildren(icon, text);
+}
+
+function updateRegisterFeedback() {
+  const user = $('#rUser')?.value.trim() || '';
+  const pass = $('#rPass')?.value || '';
+  const confirm = $('#rConfirm')?.value || '';
+  const hint = $('#rUserHint');
+  if (hint) {
+    const badChars = user.length > 0 && !/^[a-zA-Z0-9_.-]+$/.test(user);
+    hint.classList.toggle('is-bad', badChars);
+    hint.textContent = badChars
+      ? 'Use only letters, numbers, dots (.), dashes (-), or underscores (_) — no spaces.'
+      : '3–40 letters, numbers, dots (.), dashes (-), or underscores (_).';
+  }
+  const lenCheck = $('#rLenCheck');
+  if (lenCheck) {
+    lenCheck.classList.toggle('met', pass.length >= 10);
+  }
+  const matchCheck = $('#rMatchCheck');
+  if (matchCheck) {
+    const matched = confirm.length > 0 && pass === confirm;
+    const mismatched = confirm.length > 0 && pass !== confirm;
+    matchCheck.classList.toggle('met', matched);
+    matchCheck.classList.toggle('bad', mismatched);
+    matchCheck.replaceChildren();
+    const dot = document.createElement('i');
+    matchCheck.append(dot, document.createTextNode(mismatched ? 'Passwords do not match' : 'Passwords match'));
+  }
+}
+
+function setAuthMode(mode, { focus = true } = {}) {
+  const isRegister = mode === 'register';
+  setAuthAlert('');
+  $('#authTitle').textContent = isRegister ? 'Create teacher account' : 'Teacher sign in';
+  const sub = $('#authSubtitle');
+  if (sub) {
+    sub.textContent = isRegister
+      ? 'Set up your own workspace to build exams, monitor live sessions, and release scores.'
+      : 'Monitor your class live, review responses and release scores.';
+  }
+  $('#loginForm').classList.toggle('hidden', isRegister);
+  $('#showRegister').classList.toggle('hidden', isRegister);
+  $('#registerForm').classList.toggle('hidden', !isRegister);
+  $('#authTabLogin')?.setAttribute('aria-pressed', String(!isRegister));
+  $('#authTabRegister')?.setAttribute('aria-pressed', String(isRegister));
+  if (focus) (isRegister ? $('#rUser') : $('#lUser'))?.focus();
+}
+
+$('#showRegister').addEventListener('click', () => setAuthMode('register'));
+$('#showLogin').addEventListener('click', () => setAuthMode('login'));
+$('#authTabLogin')?.addEventListener('click', () => setAuthMode('login'));
+$('#authTabRegister')?.addEventListener('click', () => setAuthMode('register'));
+
+$('#loginForm').addEventListener('input', () => setAuthAlert(''));
+$('#registerForm').addEventListener('input', () => {
+  setAuthAlert('');
+  updateRegisterFeedback();
 });
+
 $('#registerForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  if ($('#rPass').value !== $('#rConfirm').value) return toast('Passwords do not match.', 'bad');
+  const username = $('#rUser').value.trim();
+  const password = $('#rPass').value;
+  if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(username)) {
+    const msg = 'Username must be 3–40 letters, numbers, dots, dashes or underscores.';
+    setAuthAlert(msg, 'bad');
+    toast(msg, 'bad');
+    $('#rUser').focus();
+    return;
+  }
+  if (password.length < 10) {
+    const msg = 'Password must be at least 10 characters.';
+    setAuthAlert(msg, 'bad');
+    toast(msg, 'bad');
+    $('#rPass').focus();
+    return;
+  }
+  if (password !== $('#rConfirm').value) {
+    const msg = 'Passwords do not match.';
+    setAuthAlert(msg, 'bad');
+    toast(msg, 'bad');
+    $('#rConfirm').focus();
+    return;
+  }
   const button = e.currentTarget.querySelector('[type="submit"]');
   button.disabled = true;
   try {
-    const res = await api('/api/teacher/register', { method: 'POST', body: { username: $('#rUser').value.trim(), password: $('#rPass').value } });
+    const res = await api('/api/teacher/register', { method: 'POST', body: { username, password } });
     localStorage.setItem('rvm_teacher_token', res.token);
     location.reload();
-  } catch (err) { toast(err.message, 'bad'); }
-  finally { button.disabled = false; }
+  } catch (err) {
+    setAuthAlert(err.message, 'bad');
+    toast(err.message, 'bad');
+  } finally {
+    button.disabled = false;
+  }
 });
 
 $('#loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const button = e.currentTarget.querySelector('[type="submit"]');
+  button.disabled = true;
   try {
     const res = await api('/api/teacher/login', {
       method: 'POST',
@@ -256,7 +393,10 @@ $('#loginForm').addEventListener('submit', async (e) => {
     toast('Signed in.', 'ok');
     location.reload();
   } catch (err) {
+    setAuthAlert(err.message, 'bad');
     toast(err.message, 'bad');
+  } finally {
+    button.disabled = false;
   }
 });
 
@@ -1548,7 +1688,7 @@ function renderBankDraft() {
       <div class="bp-question-list">
         ${(sec.questions || []).map((q, qi) => renderQuestionCard(q, si, qi)).join('')}
       </div>
-      <button class="btn btn-ghost btn-sm bp-add-question" type="button" data-bank-add-question="${si}">+ Add question</button>
+      <button class="btn btn-ghost btn-sm bp-add-question" type="button" data-bank-add-question="${si}">Add question</button>
     </section>`;
   }).join('') : '<div class="feed-empty">Nothing to preview yet. Paste questions above or add a part.</div>';
 

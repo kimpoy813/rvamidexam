@@ -313,6 +313,7 @@
   .qfoot { padding: 14px; }
 }
 
-.score-lookup { border-top: 1px solid var(--line); }
-.score-lookup summary { cursor: pointer; font-weight: 650; color: var(--brand-dark); }
-.score-lookup summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }
+.entry-panel .score-lookup { padding: 20px 30px; }
+@media (max-width: 620px) {
+  .entry-panel .score-lookup { padding: 18px 20px; }
+}

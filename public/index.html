@@ -95,14 +95,40 @@
 
       <div class="card-pad score-lookup">
         <details id="scoreLookupPanel">
-          <summary>Check a released score</summary>
-          <p class="tiny muted" style="margin-top:8px">Enter your exam code and student ID. Anyone who knows both can view your released score.</p>
-          <form id="scoreLookup" autocomplete="off" style="margin-top:14px">
-            <div class="field"><label for="lookupCode">Exam access code</label><input id="lookupCode" required maxlength="30" spellcheck="false"></div>
-            <div class="field"><label for="lookupNumber">Student ID</label><input id="lookupNumber" required minlength="2" maxlength="30"></div>
-            <button class="btn btn-soft" type="submit">Check score</button>
-            <p id="lookupResult" class="small" role="status" aria-live="polite" style="margin-top:10px"></p>
-          </form>
+          <summary class="score-lookup-summary">
+            <span class="score-lookup-badge" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 11l3 3L22 4"></path>
+                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+              </svg>
+            </span>
+            <span class="score-lookup-copy">
+              <span class="score-lookup-title">Check a released score</span>
+              <span class="score-lookup-sub">Already submitted? View your graded result</span>
+            </span>
+            <span class="score-lookup-chevron" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m6 9 6 6 6-6"></path>
+              </svg>
+            </span>
+          </summary>
+          <div class="score-lookup-body">
+            <p class="score-lookup-note">Enter your exam code and student ID. Anyone who knows both can view your released score.</p>
+            <form id="scoreLookup" autocomplete="off">
+              <div class="score-lookup-grid">
+                <div class="field">
+                  <label for="lookupCode">Exam access code</label>
+                  <input id="lookupCode" type="text" class="input-code-sm" placeholder="ABC-123" required maxlength="30" autocapitalize="characters" spellcheck="false">
+                </div>
+                <div class="field">
+                  <label for="lookupNumber">Student ID</label>
+                  <input id="lookupNumber" type="text" placeholder="e.g. 2024-0193" required minlength="2" maxlength="30">
+                </div>
+              </div>
+              <button class="btn btn-soft btn-block score-lookup-submit" type="submit">Check score</button>
+              <div id="lookupResult" class="score-lookup-output" role="status" aria-live="polite"></div>
+            </form>
+          </div>
         </details>
       </div>
 

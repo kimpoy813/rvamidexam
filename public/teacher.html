@@ -14,32 +14,84 @@
 <div class="login-wrap hidden" id="loginView">
   <div class="card login-card">
     <div class="card-pad">
-      <div class="login-mark">T</div>
-      <h1 id="authTitle" style="font-size:22px">Teacher sign in</h1>
-      <p class="muted small" style="margin-top:6px">
+      <div class="auth-top">
+        <div class="brand">
+          <div class="login-mark">EX</div>
+          <div>
+            <span class="brand-text">RVM</span>
+            <span class="brand-sub">Teacher Workspace</span>
+          </div>
+        </div>
+        <span class="pill pill-info">Educator Portal</span>
+      </div>
+
+      <h1 id="authTitle" style="font-size:24px;letter-spacing:-.03em">Teacher sign in</h1>
+      <p id="authSubtitle" class="muted small" style="margin-top:6px">
         Monitor your class live, review responses and release scores.
       </p>
-      <form id="loginForm" style="margin-top:22px">
+
+      <div class="auth-switch" role="group" aria-label="Authentication mode">
+        <button type="button" class="auth-mode-btn" id="authTabLogin" aria-pressed="true">Sign in</button>
+        <button type="button" class="auth-mode-btn" id="authTabRegister" aria-pressed="false">Create account</button>
+      </div>
+
+      <div id="authAlert" class="form-alert hidden" role="alert" aria-live="polite"></div>
+
+      <form id="loginForm" style="margin-top:18px">
         <div class="field">
           <label for="lUser">Username</label>
-          <input id="lUser" type="text" autocomplete="username" required>
+          <input id="lUser" type="text" placeholder="Enter your username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
         </div>
         <div class="field">
           <label for="lPass">Password</label>
-          <input id="lPass" type="password" autocomplete="current-password" required>
+          <div class="input-wrap">
+            <input id="lPass" type="password" placeholder="Enter your password" autocomplete="current-password" required>
+            <button type="button" class="pw-toggle" data-pw-target="lPass" aria-label="Show password" title="Show password">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+            </button>
+          </div>
         </div>
         <button class="btn btn-primary btn-lg btn-block" type="submit" style="margin-top:18px">
           Sign in
         </button>
+        <div class="auth-divider"><span>New educator?</span></div>
+        <button type="button" class="btn btn-soft btn-block" id="showRegister">Create a teacher account</button>
       </form>
-      <button type="button" class="btn btn-ghost btn-block" id="showRegister" style="margin-top:12px">Create a teacher account</button>
-      <form id="registerForm" class="hidden" style="margin-top:22px">
-        <div class="field"><label for="rUser">Choose a username</label><input id="rUser" autocomplete="username" minlength="3" maxlength="40" required></div>
-        <div class="field"><label for="rPass">Choose a password</label><input id="rPass" type="password" autocomplete="new-password" minlength="10" maxlength="200" required><p class="hint">Use at least 10 characters.</p></div>
-        <div class="field"><label for="rConfirm">Confirm password</label><input id="rConfirm" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></div>
-        <button class="btn btn-primary btn-block" type="submit" style="margin-top:18px">Create account</button>
-        <button class="btn btn-ghost btn-block" type="button" id="showLogin" style="margin-top:10px">Back to sign in</button>
+
+      <form id="registerForm" class="hidden" style="margin-top:18px">
+        <div class="field">
+          <label for="rUser">Choose a username</label>
+          <input id="rUser" type="text" placeholder="e.g. ms.santos" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="40" required>
+          <p id="rUserHint" class="hint">3–40 letters, numbers, dots (.), dashes (-), or underscores (_).</p>
+        </div>
+        <div class="field">
+          <label for="rPass">Choose a password</label>
+          <div class="input-wrap">
+            <input id="rPass" type="password" placeholder="At least 10 characters" autocomplete="new-password" minlength="10" maxlength="200" required>
+            <button type="button" class="pw-toggle" data-pw-target="rPass" data-pw-sync="rConfirm" aria-label="Show password" title="Show password">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+            </button>
+          </div>
+          <div class="pw-checks" aria-live="polite">
+            <span id="rLenCheck" class="pw-check"><i></i>10+ characters</span>
+            <span id="rMatchCheck" class="pw-check"><i></i>Passwords match</span>
+          </div>
+        </div>
+        <div class="field">
+          <label for="rConfirm">Confirm password</label>
+          <input id="rConfirm" type="password" placeholder="Re-enter your password" autocomplete="new-password" minlength="10" maxlength="200" required>
+        </div>
+        <div class="auth-note">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+          <span>Your account creates a private workspace for your own exams, access codes, and student results.</span>
+        </div>
+        <button class="btn btn-primary btn-lg btn-block" type="submit" style="margin-top:18px">Create account</button>
+        <button class="btn btn-ghost btn-block" type="button" id="showLogin" style="margin-top:8px">Back to sign in</button>
       </form>
+
+      <div class="auth-foot">
+        Taking an examination? <a href="/">Go to student portal</a>
+      </div>
     </div>
   </div>
 </div>
@@ -59,7 +111,7 @@
 
       <div class="exam-switch">
         <select id="examSelect" aria-label="Active exam" title="Active exam"></select>
-        <button class="btn btn-ghost btn-sm" id="newExamBtn" type="button">+ New</button>
+        <button class="btn btn-ghost btn-sm" id="newExamBtn" type="button">New</button>
       </div>
 
       <div class="code-chip" id="codeChip" title="Give this code to your students">
@@ -156,7 +208,7 @@
         <div class="panel-head">
           <h2>Scoreboard</h2>
           <div class="spacer"></div>
-          <button class="btn btn-ghost btn-sm" id="refreshResults">↻ Refresh</button>
+          <button class="btn btn-ghost btn-sm" id="refreshResults">Refresh</button>
           <button class="btn btn-primary btn-sm" id="exportCsv">Export CSV</button>
         </div>
         <div class="table-wrap" style="border:none;border-radius:0">
@@ -213,7 +265,7 @@
           <h2>Your exams</h2>
           <span class="pill pill-idle" id="examCount">—</span>
           <div class="spacer"></div>
-          <button class="btn btn-primary btn-sm" id="newExamBtn2" type="button">+ New exam</button>
+          <button class="btn btn-primary btn-sm" id="newExamBtn2" type="button">New exam</button>
         </div>
         <div class="table-wrap" style="border:none;border-radius:0">
           <table>
@@ -406,7 +458,7 @@
                 <div class="tiny muted">This is how each response control will appear. Change a type directly or choose Edit for the prompt, key, choices, and points.</div>
               </div>
             </div>
-            <button class="btn btn-ghost btn-sm" id="addBankSection" type="button">+ Add part</button>
+            <button class="btn btn-ghost btn-sm" id="addBankSection" type="button">Add part</button>
           </div>
 
           <div class="bank-preview" id="bankPreview" aria-live="polite"></div>
