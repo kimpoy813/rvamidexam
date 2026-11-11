@@ -240,6 +240,10 @@ $$('.pw-toggle').forEach((btn) => {
     if (!input) return;
     const show = input.type === 'password';
     input.type = show ? 'text' : 'password';
+    if (btn.dataset.pwSync) {
+      const synced = document.getElementById(btn.dataset.pwSync);
+      if (synced) synced.type = show ? 'text' : 'password';
+    }
     const label = show ? 'Hide password' : 'Show password';
     btn.setAttribute('aria-label', label);
     btn.setAttribute('title', label);
@@ -1684,7 +1688,7 @@ function renderBankDraft() {
       <div class="bp-question-list">
         ${(sec.questions || []).map((q, qi) => renderQuestionCard(q, si, qi)).join('')}
       </div>
-      <button class="btn btn-ghost btn-sm bp-add-question" type="button" data-bank-add-question="${si}">+ Add question</button>
+      <button class="btn btn-ghost btn-sm bp-add-question" type="button" data-bank-add-question="${si}">Add question</button>
     </section>`;
   }).join('') : '<div class="feed-empty">Nothing to preview yet. Paste questions above or add a part.</div>';
 

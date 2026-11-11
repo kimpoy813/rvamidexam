@@ -209,7 +209,7 @@ async function loadItem(index) {
     $('#lockNote').textContent = res.sectionLocked ? 'This section is locked.' : '';
     $('#prevBtn').disabled = res.index === 0 || lockedAt(res.index - 1);
     $('#nextBtn').textContent = isLastInSection(res.index) && res.index + 1 < res.total
-      ? 'Next section →' : res.index + 1 >= res.total ? 'Review & submit' : 'Next →';
+      ? 'Next section' : res.index + 1 >= res.total ? 'Review & submit' : 'Next';
     window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch (err) {
     $('#qbody').innerHTML = `<p class="mark-no">${escapeHtml(err.message)}</p>`;

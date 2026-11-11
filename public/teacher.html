@@ -68,7 +68,7 @@
           <label for="rPass">Choose a password</label>
           <div class="input-wrap">
             <input id="rPass" type="password" placeholder="At least 10 characters" autocomplete="new-password" minlength="10" maxlength="200" required>
-            <button type="button" class="pw-toggle" data-pw-target="rPass" aria-label="Show password" title="Show password">
+            <button type="button" class="pw-toggle" data-pw-target="rPass" data-pw-sync="rConfirm" aria-label="Show password" title="Show password">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
             </button>
           </div>
@@ -79,12 +79,7 @@
         </div>
         <div class="field">
           <label for="rConfirm">Confirm password</label>
-          <div class="input-wrap">
-            <input id="rConfirm" type="password" placeholder="Re-enter your password" autocomplete="new-password" minlength="10" maxlength="200" required>
-            <button type="button" class="pw-toggle" data-pw-target="rConfirm" aria-label="Show password" title="Show password">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-            </button>
-          </div>
+          <input id="rConfirm" type="password" placeholder="Re-enter your password" autocomplete="new-password" minlength="10" maxlength="200" required>
         </div>
         <div class="auth-note">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
@@ -116,7 +111,7 @@
 
       <div class="exam-switch">
         <select id="examSelect" aria-label="Active exam" title="Active exam"></select>
-        <button class="btn btn-ghost btn-sm" id="newExamBtn" type="button">+ New</button>
+        <button class="btn btn-ghost btn-sm" id="newExamBtn" type="button">New</button>
       </div>
 
       <div class="code-chip" id="codeChip" title="Give this code to your students">
@@ -213,7 +208,7 @@
         <div class="panel-head">
           <h2>Scoreboard</h2>
           <div class="spacer"></div>
-          <button class="btn btn-ghost btn-sm" id="refreshResults">↻ Refresh</button>
+          <button class="btn btn-ghost btn-sm" id="refreshResults">Refresh</button>
           <button class="btn btn-primary btn-sm" id="exportCsv">Export CSV</button>
         </div>
         <div class="table-wrap" style="border:none;border-radius:0">
@@ -270,7 +265,7 @@
           <h2>Your exams</h2>
           <span class="pill pill-idle" id="examCount">—</span>
           <div class="spacer"></div>
-          <button class="btn btn-primary btn-sm" id="newExamBtn2" type="button">+ New exam</button>
+          <button class="btn btn-primary btn-sm" id="newExamBtn2" type="button">New exam</button>
         </div>
         <div class="table-wrap" style="border:none;border-radius:0">
           <table>
@@ -463,7 +458,7 @@
                 <div class="tiny muted">This is how each response control will appear. Change a type directly or choose Edit for the prompt, key, choices, and points.</div>
               </div>
             </div>
-            <button class="btn btn-ghost btn-sm" id="addBankSection" type="button">+ Add part</button>
+            <button class="btn btn-ghost btn-sm" id="addBankSection" type="button">Add part</button>
           </div>
 
           <div class="bank-preview" id="bankPreview" aria-live="polite"></div>

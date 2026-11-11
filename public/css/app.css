@@ -498,6 +498,8 @@ input, select, textarea { max-width: 100%; }
 
 /* Render action icons inherit each control's theme and leave text visible. */
 button .action-icon { width: 1em; height: 1em; flex: 0 0 1em; vertical-align: -0.15em; margin-right: .4em; pointer-events: none; }
+.btn .action-icon, .tab .action-icon { margin-right: 0; }
+#nextBtn .action-icon[data-icon="right"], #startBtn .action-icon[data-icon="right"] { order: 1; }
 
 /* ----------------------------------------------------- input & form extras */
 

@@ -201,19 +201,23 @@ test('teacher sign-up UI switches modes, validates live password checks, toggles
   assert.equal(doc.querySelector('#authTabRegister').getAttribute('aria-pressed'), 'true');
   assert.match(doc.querySelector('#authTitle').textContent, /Create teacher account/);
 
-  // Test password visibility toggle.
+  // Test password visibility toggle syncs both password & confirmation inputs.
   const rPass = doc.querySelector('#rPass');
+  const rConfirm = doc.querySelector('#rConfirm');
   const pwToggle = doc.querySelector('[data-pw-target="rPass"]');
+  assert.equal(doc.querySelectorAll('#registerForm .pw-toggle').length, 1, 'sign-up form should use a single shared password toggle');
   assert.equal(rPass.type, 'password');
+  assert.equal(rConfirm.type, 'password');
   pwToggle.click();
   assert.equal(rPass.type, 'text');
+  assert.equal(rConfirm.type, 'text');
   assert.equal(pwToggle.getAttribute('aria-label'), 'Hide password');
   pwToggle.click();
   assert.equal(rPass.type, 'password');
+  assert.equal(rConfirm.type, 'password');
 
   // Invalid username characters highlight hint and block submit with inline alert.
   const rUser = doc.querySelector('#rUser');
-  const rConfirm = doc.querySelector('#rConfirm');
   rUser.value = 'bad space';
   rPass.value = 'valid-pass-1234';
   rConfirm.value = 'valid-pass-1234';

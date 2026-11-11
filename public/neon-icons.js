@@ -2,6 +2,7 @@
 // name; these SVGs are decorative and never contain user-provided markup.
 const paths = {
   plus:['M12 5v14','M5 12h14'],
+  userPlus:['M15 19v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 3 17.5V19','M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z','M19 8v6','M16 11h6'],
   edit:['M12 20h9','M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z'],
   trash:['M4 7h16','M10 11v6M14 11v6','M5 7l1 13h12l1-13','M9 7V4h6v3'],
   reset:['M3 12a9 9 0 1 0 3-6.7','M3 4v5h5','M12 8v4l3 2'],
