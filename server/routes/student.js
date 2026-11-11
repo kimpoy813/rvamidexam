@@ -9,8 +9,9 @@
  *  - every integrity event is recorded against the session
  */
 import {
-  getSession, createSession, updateSession, getSettings, getExamSettings,
-  getExamBlueprint, findExamByCode, listSessions, logEvent, now, eventsFor, db
+  getSession, createSession, discardUnpersistedSession, updateSession, getSettings, getExamSettings,
+  getExamBlueprint, findExamByCode, listSessions, logEvent, now, eventsFor, db,
+  isRemoteStorageEnabled, flushRemoteStorage
 } from '../lib/db.js';
 import { buildPaper, gradePaper } from '../lib/exam.js';
 import { HttpError, sendJson, readJsonBody, clientIp } from '../lib/http.js';
@@ -146,6 +147,15 @@ export function registerStudentRoutes(router) {
       user_agent: String(req.headers['user-agent'] || '').slice(0, 300)
     });
     logEvent(session.token, 'join', `${name} (${studentNo}) from ${clientIp(req)}`);
+    if (isRemoteStorageEnabled()) {
+      try {
+        await flushRemoteStorage();
+      } catch (err) {
+        discardUnpersistedSession(session.token);
+        console.error('[exam] remote storage sync failed during join:', err.message || err);
+        throw new HttpError(503, 'Database storage could not save changes. Please retry.');
+      }
+    }
     broadcastRoster(true);
     sendJson(res, 201, { token: session.token, resumed: false, secondsLeft: secondsLeft(session, s) });
   });

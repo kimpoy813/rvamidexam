@@ -25,8 +25,7 @@ export class HttpError extends Error {
   }
 }
 
-export function sendJson(res, status, body) {
-  const payload = JSON.stringify(body);
+function writeJsonNow(res, status, payload) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload),
@@ -35,7 +34,7 @@ export function sendJson(res, status, body) {
   res.end(payload);
 }
 
-export function sendText(res, status, text, type = 'text/plain; charset=utf-8', headers = {}) {
+function writeTextNow(res, status, text, type, headers) {
   res.writeHead(status, {
     'Content-Type': type,
     'Content-Length': Buffer.byteLength(text),
@@ -43,6 +42,55 @@ export function sendText(res, status, text, type = 'text/plain; charset=utf-8', 
     ...headers
   });
   res.end(text);
+}
+
+export function sendJson(res, status, body) {
+  const payload = JSON.stringify(body);
+  if (status < 400 && typeof res._beforeSend === 'function') {
+    const pending = res._beforeSend();
+    if (pending && typeof pending.then === 'function') {
+      return pending.then(
+        () => writeJsonNow(res, status, payload),
+        (err) => {
+          console.error('[exam] remote storage sync failed:', err.message || err);
+          if (!res.headersSent) {
+            writeJsonNow(
+              res,
+              503,
+              JSON.stringify({ error: 'Database storage could not save changes. Please retry.' })
+            );
+          } else {
+            res.end();
+          }
+        }
+      );
+    }
+  }
+  writeJsonNow(res, status, payload);
+}
+
+export function sendText(res, status, text, type = 'text/plain; charset=utf-8', headers = {}) {
+  if (status < 400 && typeof res._beforeSend === 'function') {
+    const pending = res._beforeSend();
+    if (pending && typeof pending.then === 'function') {
+      return pending.then(
+        () => writeTextNow(res, status, text, type, headers),
+        (err) => {
+          console.error('[exam] remote storage sync failed:', err.message || err);
+          if (!res.headersSent) {
+            writeJsonNow(
+              res,
+              503,
+              JSON.stringify({ error: 'Database storage could not save changes. Please retry.' })
+            );
+          } else {
+            res.end();
+          }
+        }
+      );
+    }
+  }
+  writeTextNow(res, status, text, type, headers);
 }
 
 export async function readJsonBody(req, limitBytes = 2_000_000) {
