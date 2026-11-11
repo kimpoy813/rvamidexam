@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Final Examination — Student Entry</title>
-<link rel="stylesheet" href="/css/app.css">
-<link rel="stylesheet" href="/css/exam.css">
+<link rel="stylesheet" href="/css/app.css?v=20261111b">
+<link rel="stylesheet" href="/css/exam.css?v=20261111b">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%234f46e5'/><text x='50' y='68' font-size='52' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'>E</text></svg>">
 </head>
 <body>
@@ -46,56 +46,63 @@
 
     <!-- ------------------------------------------------------- right: form -->
     <section class="card entry-panel">
-      <div class="card-pad">
-        <div class="panel-kicker"><span class="panel-kicker-dot"></span> Student check-in</div>
-        <h2>Ready to begin?</h2>
-        <p class="muted small" style="margin-top:4px">
-          Enter your details below. Your teacher will provide the access code.
-        </p>
-
-        <form id="joinForm" style="margin-top:22px" autocomplete="off">
-          <div class="field">
-            <label for="fCode">Exam access code</label>
-            <input id="fCode" type="text" class="input-code" placeholder="ABC-123"
-                   maxlength="8" required spellcheck="false" inputmode="text">
-          </div>
-
-          <div class="field">
-            <label for="fName">Full name <span class="muted">(as it appears in the class record)</span></label>
-            <input id="fName" type="text" autocomplete="name" placeholder="e.g. Maria Santos" required maxlength="80">
-          </div>
-
-          <div class="two-col">
-            <div class="field">
-              <label for="fNo">Student number</label>
-              <input id="fNo" type="text" placeholder="e.g. 2024-0193" required maxlength="30">
-            </div>
-            <div class="field">
-              <label for="fSection">Class / section</label>
-              <input id="fSection" type="text" placeholder="e.g. Grade 10 - St. Mary" maxlength="40">
-            </div>
-          </div>
-
-          <label class="switch" style="margin-top:18px">
-            <input type="checkbox" id="fAgree">
-            <span class="track"></span>
-            <span>I have read the rules and I will answer this exam <b>honestly and independently</b>.</span>
-          </label>
-
-          <button class="btn btn-primary btn-lg btn-block" id="startBtn" type="submit" disabled style="margin-top:18px">
-            Start examination
-          </button>
-
-          <p class="tiny muted center" style="margin-top:14px">
-            Your name, student number, IP address, tab-switching events, and copy/cut/paste attempts are recorded
-            and visible to your teacher.
-          </p>
-        </form>
+      <div class="entry-switch-bar">
+        <div class="auth-switch" role="group" aria-label="Student portal mode">
+          <button type="button" class="auth-mode-btn" id="entryTabCheckin" aria-pressed="true">Student check-in</button>
+          <button type="button" class="auth-mode-btn" id="entryTabScore" aria-pressed="false">Check score</button>
+        </div>
       </div>
 
-      <div class="card-pad score-lookup">
-        <details id="scoreLookupPanel">
-          <summary class="score-lookup-summary">
+      <div id="checkInPane">
+        <div class="card-pad" style="padding-top:22px">
+          <div class="panel-kicker"><span class="panel-kicker-dot"></span> Student check-in</div>
+          <h2>Ready to begin?</h2>
+          <p class="muted small" style="margin-top:4px">
+            Enter your details below. Your teacher will provide the access code.
+          </p>
+
+          <form id="joinForm" style="margin-top:22px" autocomplete="off">
+            <div class="field">
+              <label for="fCode">Exam access code</label>
+              <input id="fCode" type="text" class="input-code" placeholder="ABC-123"
+                     maxlength="8" required spellcheck="false" inputmode="text">
+            </div>
+
+            <div class="field">
+              <label for="fName">Full name <span class="muted">(as it appears in the class record)</span></label>
+              <input id="fName" type="text" autocomplete="name" placeholder="e.g. Maria Santos" required maxlength="80">
+            </div>
+
+            <div class="two-col">
+              <div class="field">
+                <label for="fNo">Student number</label>
+                <input id="fNo" type="text" placeholder="e.g. 2024-0193" required maxlength="30">
+              </div>
+              <div class="field">
+                <label for="fSection">Class / section</label>
+                <input id="fSection" type="text" placeholder="e.g. 10 - St. Mary" maxlength="40">
+              </div>
+            </div>
+
+            <label class="switch" style="margin-top:18px">
+              <input type="checkbox" id="fAgree">
+              <span class="track"></span>
+              <span>I have read the rules and I will answer this exam <b>honestly and independently</b>.</span>
+            </label>
+
+            <button class="btn btn-primary btn-lg btn-block" id="startBtn" type="submit" disabled style="margin-top:18px">
+              Start examination
+            </button>
+
+            <p class="tiny muted center" style="margin-top:14px">
+              Your name, student number, IP address, tab-switching events, and copy/cut/paste attempts are recorded
+              and visible to your teacher.
+            </p>
+          </form>
+        </div>
+
+        <div class="score-launch">
+          <button type="button" class="score-launch-btn" id="openScoreLookup">
             <span class="score-lookup-badge" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M9 11l3 3L22 4"></path>
@@ -106,30 +113,41 @@
               <span class="score-lookup-title">Check a released score</span>
               <span class="score-lookup-sub">Already submitted? View your graded result</span>
             </span>
-            <span class="score-lookup-chevron" aria-hidden="true">
+            <span class="score-launch-arrow" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m6 9 6 6 6-6"></path>
+                <path d="M5 12h14"></path>
+                <path d="m13 6 6 6-6 6"></path>
               </svg>
             </span>
-          </summary>
-          <div class="score-lookup-body">
-            <p class="score-lookup-note">Enter your exam code and student ID. Anyone who knows both can view your released score.</p>
-            <form id="scoreLookup" autocomplete="off">
-              <div class="score-lookup-grid">
-                <div class="field">
-                  <label for="lookupCode">Exam access code</label>
-                  <input id="lookupCode" type="text" class="input-code-sm" placeholder="ABC-123" required maxlength="30" autocapitalize="characters" spellcheck="false">
-                </div>
-                <div class="field">
-                  <label for="lookupNumber">Student ID</label>
-                  <input id="lookupNumber" type="text" placeholder="e.g. 2024-0193" required minlength="2" maxlength="30">
-                </div>
-              </div>
-              <button class="btn btn-soft btn-block score-lookup-submit" type="submit">Check score</button>
-              <div id="lookupResult" class="score-lookup-output" role="status" aria-live="polite"></div>
-            </form>
-          </div>
-        </details>
+          </button>
+        </div>
+      </div>
+
+      <div id="scoreLookupPanel" class="hidden">
+        <div class="card-pad" style="padding-top:22px">
+          <div class="panel-kicker score-kicker"><span class="panel-kicker-dot"></span> Released results</div>
+          <h2>Check a released score</h2>
+          <p class="muted small" style="margin-top:4px">
+            Enter your exam code and student ID. Anyone who knows both can view your released score.
+          </p>
+
+          <form id="scoreLookup" autocomplete="off" style="margin-top:20px">
+            <div class="field">
+              <label for="lookupCode">Exam access code</label>
+              <input id="lookupCode" type="text" class="input-code" placeholder="ABC-123" required maxlength="30" autocapitalize="characters" spellcheck="false" inputmode="text">
+            </div>
+            <div class="field">
+              <label for="lookupNumber">Student ID / number</label>
+              <input id="lookupNumber" type="text" placeholder="e.g. 2024-0193" required minlength="2" maxlength="30">
+              <p class="hint">Use the exact student number you entered during check-in.</p>
+            </div>
+            <button class="btn btn-primary btn-lg btn-block" type="submit" style="margin-top:18px">Check score</button>
+            <div id="lookupResult" class="score-lookup-output" role="status" aria-live="polite"></div>
+          </form>
+
+          <div class="auth-divider"><span>Taking an exam?</span></div>
+          <button type="button" class="btn btn-ghost btn-block" id="backToCheckin">Back to student check-in</button>
+        </div>
       </div>
 
       <div class="entry-foot">
@@ -140,7 +158,7 @@
   </div>
 </main>
 
-<script type="module" src="/js/student-entry.js"></script>
-<script type="module" src="/js/render-icons.js"></script>
+<script type="module" src="/js/student-entry.js?v=20261111b"></script>
+<script type="module" src="/js/render-icons.js?v=20261111b"></script>
 </body>
 </html>

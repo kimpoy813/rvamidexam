@@ -185,53 +185,74 @@ const retry=document.createElement('button'); retry.type='button'; retry.id='ret
 retry.addEventListener('click',()=>{for(const [id,item] of [...failed]) {failed.delete(id); queueSave(id,item.value,item.version);} status();});
 const discard=document.createElement('button'); discard.type='button'; discard.id='discardSaves'; discard.className='btn btn-ghost btn-sm hidden'; discard.textContent='Discard unsaved answers'; retry.after(discard);
 discard.addEventListener('click',()=>{ if(!confirm('Discard unsaved changes and keep the last saved answers?')) return; for(const id of failed.keys()){ if(confirmed[id] === undefined) delete paper.answers[id]; else paper.answers[id]=confirmed[id]; } failed.clear(); $('#message').classList.add('hidden'); status(); paint(); });
-for(const [selector,icon] of Object.entries({'#showExamInfo':'eye','#resultLookup [type=submit]':'chart','#submittedResultLookup [type=submit]':'chart','#startExam':'right','#prev':'left','#next':'right','#submit':'check','#submitTop':'check','#retrySaves':'refresh','#discardSaves':'reset','#checkReopen':'refresh'})) addIcon($(selector),icon);
+for(const [selector,icon] of Object.entries({'#showExamInfo':'eye','#resultLookup [type=submit]':'chart','#submittedResultLookup [type=submit]':'chart','#backToCheckin':'left','#startExam':'right','#prev':'left','#next':'right','#submit':'check','#submitTop':'check','#retrySaves':'refresh','#discardSaves':'reset','#checkReopen':'refresh'})) addIcon($(selector),icon);
+function setNeonEntryMode(mode){const isScore=mode==='score';$('#neonCheckInPane')?.classList.toggle('hidden',isScore);$('#neonScoreLookupPane')?.classList.toggle('hidden',!isScore);$('#entryTabCheckin')?.setAttribute('aria-pressed',String(!isScore));$('#entryTabScore')?.setAttribute('aria-pressed',String(isScore));if(isScore){if(!$('#resultCode').value&&$('#code').value.trim())$('#resultCode').value=$('#code').value.trim();if(!$('#resultNumber').value&&$('#number').value.trim())$('#resultNumber').value=$('#number').value.trim();($('#resultCode').value?$('#resultNumber'):$('#resultCode')).focus?.();}else $('#code')?.focus?.();}
+$('#entryTabCheckin')?.addEventListener('click',()=>setNeonEntryMode('checkin'));
+$('#entryTabScore')?.addEventListener('click',()=>setNeonEntryMode('score'));
+$('#openScoreLookup')?.addEventListener('click',()=>setNeonEntryMode('score'));
+$('#backToCheckin')?.addEventListener('click',()=>setNeonEntryMode('checkin'));
 let infoGeneration=0;
 $('#code').addEventListener('input',()=>{infoGeneration++;$('#entryExamInfo').textContent='';$('#heroTitle').textContent='Ready for your examination?';$('#heroMeta').textContent='Your teacher will provide your exam access code. Read the instructions before you begin.';$('#heroStats').replaceChildren();});
 $('#showExamInfo').addEventListener('click',async e=>{const button=e.currentTarget,code=$('#code').value,generation=++infoGeneration;button.disabled=true;try{const info=await api('exam-info',{code});if(generation!==infoGeneration || code!==$('#code').value)return;$('#heroTitle').textContent=info.title;$('#heroMeta').textContent=[info.school,info.subject,info.term].filter(Boolean).join(' · ') || 'Read the instructions before you begin.';const stats=$('#heroStats');stats.replaceChildren();for(const [value,label] of [[info.duration,'minutes'],[info.question_count,'questions']]){const stat=document.createElement('div');stat.className='hero-stat';const strong=document.createElement('div');strong.className='v';strong.textContent=value;const caption=document.createElement('div');caption.className='k';caption.textContent=label;stat.append(strong,caption);stats.append(stat);}
   $('#entryExamInfo').textContent=[info.title,[info.school,info.subject,info.term].filter(Boolean).join(' · '),`${info.duration} minutes · ${info.question_count} questions · ${info.open?'Open':'Closed'}`,info.proctor_notes,info.instructions].filter(Boolean).join('\n');}catch(err){if(generation===infoGeneration)$('#entryExamInfo').textContent=err.message;}finally{button.disabled=false;}});
-function renderNeonScore(output, state, payload) {
+function renderNeonScore(output, state, payload, numberInput) {
   const card = document.createElement('div');
   if (state === 'loading') {
     card.className = 'score-card is-loading';
     const pulse = document.createElement('span'); pulse.className = 'score-card-pulse'; pulse.setAttribute('aria-hidden', 'true');
-    const txt = document.createElement('span'); txt.textContent = 'Checking released score…';
+    const txt = document.createElement('span'); txt.textContent = 'Looking up your released score…';
     card.append(pulse, txt);
   } else if (state === 'error') {
     card.className = 'score-card is-error';
-    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const ns = 'http://www.w3.org/2000/svg', icon = document.createElementNS(ns, 'svg');
     icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('fill', 'none'); icon.setAttribute('stroke', 'currentColor'); icon.setAttribute('stroke-width', '2'); icon.setAttribute('stroke-linecap', 'round'); icon.setAttribute('stroke-linejoin', 'round'); icon.setAttribute('aria-hidden', 'true');
-    for (const d of ['M12 8v4', 'M12 16h.01', 'M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z']) { const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', d); icon.append(p); }
+    for (const d of ['M12 8v4', 'M12 16h.01', 'M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z']) { const p = document.createElementNS(ns, 'path'); p.setAttribute('d', d); icon.append(p); }
+    const copy = document.createElement('div'); copy.className = 'score-error-copy';
+    const h = document.createElement('strong'); h.className = 'score-error-title'; h.textContent = 'Score not available';
     const txt = document.createElement('span'); txt.textContent = payload;
-    card.append(icon, txt);
+    copy.append(h, txt); card.append(icon, copy);
   } else {
     const max = Number(payload.total ?? payload.max) || 0, score = Number(payload.score) || 0, pending = Number(payload.pending) || 0;
     const pct = max > 0 ? Math.max(0, Math.min(100, Math.round((score / max) * 100))) : 0;
+    const stroke = pending ? '#d97706' : pct >= 75 ? '#059669' : pct >= 50 ? '#4f46e5' : '#e11d48';
+    const r = 30, circ = 2 * Math.PI * r, ns = 'http://www.w3.org/2000/svg';
     card.className = `score-card ${pending ? 'is-provisional' : 'is-ok'}`;
+    const hero = document.createElement('div'); hero.className = 'score-card-hero';
+    const ring = document.createElement('div'); ring.className = 'score-mini-ring';
+    const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', '0 0 72 72'); svg.setAttribute('aria-hidden', 'true');
+    const bg = document.createElementNS(ns, 'circle'); bg.setAttribute('class', 'bg'); bg.setAttribute('cx', '36'); bg.setAttribute('cy', '36'); bg.setAttribute('r', String(r));
+    const fg = document.createElementNS(ns, 'circle'); fg.setAttribute('class', 'fg'); fg.setAttribute('cx', '36'); fg.setAttribute('cy', '36'); fg.setAttribute('r', String(r)); fg.setAttribute('stroke', stroke); fg.setAttribute('stroke-dasharray', circ.toFixed(2)); fg.setAttribute('stroke-dashoffset', (circ * (1 - pct / 100)).toFixed(2));
+    svg.append(bg, fg);
+    const pctEl = document.createElement('span'); pctEl.className = 'pct-label score-card-pct'; pctEl.textContent = `${pct}%`;
+    ring.append(svg, pctEl);
+    const meta = document.createElement('div'); meta.className = 'score-card-meta';
     const top = document.createElement('div'); top.className = 'score-card-top';
-    const title = document.createElement('strong'); title.className = 'score-card-title'; title.textContent = payload.title || 'Examination';
     const pill = document.createElement('span'); pill.className = `pill ${pending ? 'pill-warn' : 'pill-live'}`;
     const dot = document.createElement('span'); dot.className = 'pill-dot';
-    pill.append(dot, document.createTextNode(pending ? 'Provisional' : 'Released'));
-    top.append(title, pill);
+    pill.append(dot, document.createTextNode(pending ? 'Provisional' : 'Released')); top.append(pill);
+    const title = document.createElement('strong'); title.className = 'score-card-title'; title.textContent = payload.title || 'Examination';
     const main = document.createElement('div'); main.className = 'score-card-main';
     const pts = document.createElement('div'); pts.className = 'score-card-points'; pts.append(document.createTextNode(`${score} / ${max} `));
-    const unit = document.createElement('span'); unit.textContent = 'pts'; pts.append(unit);
-    const pctEl = document.createElement('div'); pctEl.className = 'score-card-pct'; pctEl.textContent = `${pct}%`;
-    main.append(pts, pctEl);
-    const bar = document.createElement('div'); bar.className = `bar ${pending ? 'warn' : 'ok'}`; bar.setAttribute('aria-hidden', 'true');
+    const unit = document.createElement('span'); unit.textContent = 'pts'; pts.append(unit); main.append(pts);
+    meta.append(top, title, main); hero.append(ring, meta);
+    const bar = document.createElement('div'); bar.className = `bar ${pending ? 'warn' : pct >= 50 ? 'ok' : 'bad'}`; bar.setAttribute('aria-hidden', 'true');
     const fill = document.createElement('span'); fill.style.width = `${pct}%`; bar.append(fill);
-    card.append(top, main, bar);
+    card.append(hero, bar);
     if (pending) { const foot = document.createElement('div'); foot.className = 'score-card-foot'; foot.textContent = `${pending} points awaiting grading; score is provisional.`; card.append(foot); }
+    const actions = document.createElement('div'); actions.className = 'score-card-actions';
+    const priv = document.createElement('span'); priv.className = 'score-card-privacy'; priv.textContent = 'On a shared device?';
+    const hide = document.createElement('button'); hide.type = 'button'; hide.className = 'score-hide-btn'; hide.textContent = 'Hide score'; addIcon(hide, 'eyeOff');
+    hide.addEventListener('click', () => { output.replaceChildren(); if (numberInput) { numberInput.value = ''; numberInput.focus?.(); } });
+    actions.append(priv, hide); card.append(actions);
   }
   output.replaceChildren(card);
 }
 for(const [form,code,number,result] of [['#resultLookup','#resultCode','#resultNumber','#lookupResult'],['#submittedResultLookup','#submittedResultCode','#submittedResultNumber','#submittedLookupResult']]) {
-  let generation=0;const output=$(result);
+  let generation=0;const output=$(result),numEl=$(number);
   $(form).addEventListener('input',()=>{generation++;output.replaceChildren();});
   $(form).addEventListener('submit',async e=>{
     e.preventDefault();const button=e.currentTarget.querySelector('[type=submit]'),current=++generation;button.disabled=true;renderNeonScore(output,'loading');
-    try {const r=await api('result-lookup',{code:$(code).value,number:$(number).value});if(current===generation)renderNeonScore(output,'ok',r);}
+    try {const r=await api('result-lookup',{code:$(code).value,number:numEl.value});if(current===generation)renderNeonScore(output,'ok',r,numEl);}
     catch(err){if(current===generation)renderNeonScore(output,'error',err.message);}finally{button.disabled=false;}
   });
 }

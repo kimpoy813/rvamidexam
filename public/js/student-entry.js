@@ -132,11 +132,13 @@ $('#joinForm').addEventListener('submit', async (e) => {
 });
 
 let lookupGeneration = 0;
+const checkInPane = $('#checkInPane');
 const lookupPanel = $('#scoreLookupPanel');
 const lookupForm = $('#scoreLookup');
 const lookupCodeInput = $('#lookupCode');
 const lookupNumberInput = $('#lookupNumber');
 const lookupResult = $('#lookupResult');
+lookupPanel.open = false;
 
 function prefillScoreLookup() {
   if (!lookupCodeInput.value && $('#fCode')?.value.trim()) {
@@ -148,18 +150,32 @@ function prefillScoreLookup() {
   }
 }
 
-function openScoreLookupFromHash() {
-  if (location.hash === '#scoreLookupPanel') {
-    lookupPanel.open = true;
+function setEntryMode(mode, { focus = true, scroll = false } = {}) {
+  const isScore = mode === 'score';
+  checkInPane?.classList.toggle('hidden', isScore);
+  lookupPanel.classList.toggle('hidden', !isScore);
+  lookupPanel.open = isScore;
+  $('#entryTabCheckin')?.setAttribute('aria-pressed', String(!isScore));
+  $('#entryTabScore')?.setAttribute('aria-pressed', String(isScore));
+  if (isScore) {
     prefillScoreLookup();
-    lookupPanel.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
-    (lookupCodeInput.value ? lookupNumberInput : lookupCodeInput).focus?.();
+    if (scroll) lookupPanel.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+    if (focus) (lookupCodeInput.value ? lookupNumberInput : lookupCodeInput).focus?.();
+  } else if (focus) {
+    $('#fCode')?.focus?.();
   }
 }
 
-lookupPanel.addEventListener('toggle', () => {
-  if (lookupPanel.open) prefillScoreLookup();
-});
+function openScoreLookupFromHash() {
+  if (location.hash === '#scoreLookupPanel') {
+    setEntryMode('score', { focus: true, scroll: true });
+  }
+}
+
+$('#entryTabCheckin')?.addEventListener('click', () => setEntryMode('checkin'));
+$('#entryTabScore')?.addEventListener('click', () => setEntryMode('score'));
+$('#openScoreLookup')?.addEventListener('click', () => setEntryMode('score'));
+$('#backToCheckin')?.addEventListener('click', () => setEntryMode('checkin'));
 window.addEventListener('hashchange', openScoreLookupFromHash);
 openScoreLookupFromHash();
 
@@ -172,7 +188,7 @@ function renderLookupLoading() {
   pulse.className = 'score-card-pulse';
   pulse.setAttribute('aria-hidden', 'true');
   const label = document.createElement('span');
-  label.textContent = 'Checking released score…';
+  label.textContent = 'Looking up your released score…';
   card.append(pulse, label);
   lookupResult.replaceChildren(card);
 }
@@ -193,9 +209,15 @@ function renderLookupError(message) {
     p.setAttribute('d', d);
     icon.append(p);
   }
+  const copy = document.createElement('div');
+  copy.className = 'score-error-copy';
+  const heading = document.createElement('strong');
+  heading.className = 'score-error-title';
+  heading.textContent = 'Score not available';
   const text = document.createElement('span');
   text.textContent = message;
-  card.append(icon, text);
+  copy.append(heading, text);
+  card.append(icon, copy);
   lookupResult.replaceChildren(card);
 }
 
@@ -204,21 +226,55 @@ function renderLookupSuccess(result) {
   const score = Number(result.score) || 0;
   const pending = Number(result.pending) || 0;
   const pct = max > 0 ? Math.max(0, Math.min(100, Math.round((score / max) * 100))) : 0;
+  const stroke = pending ? '#d97706' : pct >= 75 ? '#059669' : pct >= 50 ? '#4f46e5' : '#e11d48';
+  const r = 30;
+  const circ = 2 * Math.PI * r;
 
   const card = document.createElement('div');
   card.className = `score-card ${pending ? 'is-provisional' : 'is-ok'}`;
 
+  const hero = document.createElement('div');
+  hero.className = 'score-card-hero';
+
+  const ring = document.createElement('div');
+  ring.className = 'score-mini-ring';
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 72 72');
+  svg.setAttribute('aria-hidden', 'true');
+  const bg = document.createElementNS(ns, 'circle');
+  bg.setAttribute('class', 'bg');
+  bg.setAttribute('cx', '36');
+  bg.setAttribute('cy', '36');
+  bg.setAttribute('r', String(r));
+  const fg = document.createElementNS(ns, 'circle');
+  fg.setAttribute('class', 'fg');
+  fg.setAttribute('cx', '36');
+  fg.setAttribute('cy', '36');
+  fg.setAttribute('r', String(r));
+  fg.setAttribute('stroke', stroke);
+  fg.setAttribute('stroke-dasharray', circ.toFixed(2));
+  fg.setAttribute('stroke-dashoffset', (circ * (1 - pct / 100)).toFixed(2));
+  svg.append(bg, fg);
+  const pctLabel = document.createElement('span');
+  pctLabel.className = 'pct-label score-card-pct';
+  pctLabel.textContent = `${pct}%`;
+  ring.append(svg, pctLabel);
+
+  const meta = document.createElement('div');
+  meta.className = 'score-card-meta';
   const top = document.createElement('div');
   top.className = 'score-card-top';
-  const title = document.createElement('strong');
-  title.className = 'score-card-title';
-  title.textContent = result.title || 'Examination';
   const pill = document.createElement('span');
   pill.className = `pill ${pending ? 'pill-warn' : 'pill-live'}`;
   const dot = document.createElement('span');
   dot.className = 'pill-dot';
   pill.append(dot, document.createTextNode(pending ? 'Provisional' : 'Released'));
-  top.append(title, pill);
+  top.append(pill);
+
+  const title = document.createElement('strong');
+  title.className = 'score-card-title';
+  title.textContent = result.title || 'Examination';
 
   const main = document.createElement('div');
   main.className = 'score-card-main';
@@ -228,19 +284,19 @@ function renderLookupSuccess(result) {
   const unit = document.createElement('span');
   unit.textContent = 'pts';
   points.append(unit);
-  const pctEl = document.createElement('div');
-  pctEl.className = 'score-card-pct';
-  pctEl.textContent = `${pct}%`;
-  main.append(points, pctEl);
+  main.append(points);
+
+  meta.append(top, title, main);
+  hero.append(ring, meta);
 
   const bar = document.createElement('div');
-  bar.className = `bar ${pending ? 'warn' : 'ok'}`;
+  bar.className = `bar ${pending ? 'warn' : pct >= 50 ? 'ok' : 'bad'}`;
   bar.setAttribute('aria-hidden', 'true');
   const fill = document.createElement('span');
   fill.style.width = `${pct}%`;
   bar.append(fill);
 
-  card.append(top, main, bar);
+  card.append(hero, bar);
 
   if (pending) {
     const foot = document.createElement('div');
@@ -248,6 +304,24 @@ function renderLookupSuccess(result) {
     foot.textContent = `${pending} points awaiting grading; score is provisional.`;
     card.append(foot);
   }
+
+  const actions = document.createElement('div');
+  actions.className = 'score-card-actions';
+  const privacy = document.createElement('span');
+  privacy.className = 'score-card-privacy';
+  privacy.textContent = 'On a shared device?';
+  const hideBtn = document.createElement('button');
+  hideBtn.type = 'button';
+  hideBtn.className = 'score-hide-btn';
+  hideBtn.textContent = 'Hide score';
+  hideBtn.addEventListener('click', () => {
+    lookupGeneration++;
+    lookupResult.replaceChildren();
+    lookupNumberInput.value = '';
+    lookupNumberInput.focus?.();
+  });
+  actions.append(privacy, hideBtn);
+  card.append(actions);
 
   lookupResult.replaceChildren(card);
 }
