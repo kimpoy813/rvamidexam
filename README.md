@@ -413,9 +413,11 @@ Persistent Disk** (requires Render's paid Starter plan):
    `sessions`, and `events` with Row Level Security enabled).
 2. In your Render service → **Environment**, add:
    - `SUPABASE_URL` = `https://<project-ref>.supabase.co`
-   - `SUPABASE_SERVICE_ROLE_KEY` = your Supabase `service_role` / `sb_secret_...` key
-     *(from Supabase Dashboard → Project Settings → API; never use the public
-     `anon` / `publishable` key)*
+   - `SUPABASE_SERVICE_ROLE_KEY` = your Supabase **`service_role` JWT key** (`eyJ...`,
+     found under **Supabase Dashboard → Project Settings → API Keys → Legacy anon,
+     service_role API keys**; `sb_secret_...` keys also work with automatic clock-skew
+     retry, but the legacy `service_role` JWT avoids Supabase edge gateway `JWT issued
+     at future` clock skew entirely — never use the public `anon` / `publishable` key)
    *(Alternatively, set `DATABASE_URL` or `SUPABASE_DB_URL` to your Supabase
    IPv4 Session/Transaction Pooler connection string.)*
 3. Redeploy and open `/teacher` → **Exam setup** to confirm **Supabase storage

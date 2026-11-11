@@ -8,7 +8,7 @@ import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { resolveRemoteConfig } from '../server/lib/remote-store.js';
+import { resolveRemoteConfig, createSupabaseRestStore } from '../server/lib/remote-store.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -297,6 +297,44 @@ test('resolveRemoteConfig validates Supabase credentials and rejects public anon
   });
   assert.equal(pgCfg.driver, 'postgres');
   assert.equal(pgCfg.mode, 'supabase');
+});
+
+test('createSupabaseRestStore retries transient "JWT issued at future" clock skew on sb_secret_* keys', async () => {
+  let calls = 0;
+  const store = createSupabaseRestStore({
+    url: 'https://example.supabase.co',
+    key: 'sb_secret_clock_skew_test',
+    clockSkewDelaysMs: [10, 15],
+    fetchImpl: async () => {
+      calls++;
+      if (calls <= 2) {
+        return new Response(JSON.stringify({ code: 'PGRST301', message: 'JWT issued at future' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+  });
+
+  const data = await store.init();
+  assert.deepEqual(data.settings, []);
+  assert.ok(calls >= 9, 'initial warm-up retried twice and then loaded all 8 tables');
+
+  const alwaysSkewed = createSupabaseRestStore({
+    url: 'https://example.supabase.co',
+    key: 'sb_secret_clock_skew_test',
+    clockSkewDelaysMs: [5, 5],
+    fetchImpl: async () =>
+      new Response(JSON.stringify({ code: 'PGRST301', message: 'JWT issued at future' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      })
+  });
+  await assert.rejects(() => alwaysSkewed.init(), /Legacy API keys/i);
 });
 
 test('Render boots without a persistent disk when Supabase is configured and survives a wiped container', { timeout: 30_000 }, async () => {
